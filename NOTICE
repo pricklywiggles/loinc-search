@@ -1,0 +1,59 @@
+LOINC Search
+Copyright (c) 2026 Gustavo Gallegos
+
+This product is released under the MIT License (see LICENSE).
+
+================================================================================
+
+The source code in this repository does not include the LOINC dataset; users
+must download LOINC themselves from https://loinc.org/downloads/ and accept the
+LOINC license before running this software. The dataset is loaded into a local
+Postgres database via the import script in scripts/import-loinc.ts.
+
+When this software is deployed and surfaces LOINC content (codes, names,
+synonyms, etc.), the deployment retains LOINC's required attribution. The
+running site reproduces the notice below at /about, linked from the footer.
+
+================================================================================
+
+LOINC ATTRIBUTION (required by Section 10 of the LOINC License)
+
+  This material contains content from LOINC (http://loinc.org). LOINC is
+  copyright (c) Regenstrief Institute, Inc. and the Logical Observation
+  Identifiers Names and Codes (LOINC) Committee and is available at no cost
+  under the license at http://loinc.org/license. LOINC(R) is a registered
+  United States trademark of Regenstrief Institute, Inc.
+
+  Some individual LOINC records carry an additional third-party copyright
+  notice in the EXTERNAL_COPYRIGHT_NOTICE field. Where this software surfaces
+  such records, that per-record notice is rendered alongside the record's
+  display name. Use of those records is also subject to the third-party
+  copyright owner's terms.
+
+================================================================================
+
+UCUM ATTRIBUTION (required by Section G of the LOINC License third-party
+appendix, applicable because this software stores and displays the
+EXAMPLE_UCUM_UNITS field as `ucum_units`)
+
+  This product includes all or a portion of the UCUM table, UCUM codes, and
+  UCUM definitions or is derived from it, subject to a license from
+  Regenstrief Institute, Inc. Your use of the UCUM table, UCUM codes, UCUM
+  definitions also is subject to this license, a copy of which is available
+  at http://unitsofmeasure.org. The current complete UCUM table, UCUM
+  Specification are available for download at http://unitsofmeasure.org. The
+  UCUM table and UCUM codes are copyright (c) 1995-2024, Regenstrief
+  Institute, Inc. and the Unified Codes for Units of Measures (UCUM)
+  Organization. All rights reserved. THE UCUM TABLE (IN ALL FORMATS), UCUM
+  DEFINITIONS, AND SPECIFICATION ARE PROVIDED "AS IS". ANY EXPRESS OR
+  IMPLIED WARRANTIES ARE DISCLAIMED, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+  PURPOSE.
+
+================================================================================
+
+DISCLAIMER
+
+This software and the LOINC content it surfaces are provided "AS IS", without
+warranty of any kind. Do not rely on this software as the sole source of
+clinical or laboratory information.
