@@ -9,12 +9,20 @@ export function ResultsList({
   onSelect: (code: string) => void;
 }) {
   return (
-    <ul className="space-y-2">
-      {results.map((r) => (
-        <li key={r.loinc_num}>
-          <ResultCard result={r} onSelect={onSelect} />
-        </li>
-      ))}
-    </ul>
+    <div>
+      <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[color:var(--paper-muted)]">
+        <span className="font-display text-base normal-case tracking-normal text-[color:var(--brass)]">
+          {results.length}
+        </span>{' '}
+        result{results.length === 1 ? '' : 's'}
+      </p>
+      <ol className="border-b border-[color:var(--rule)]">
+        {results.map((r, i) => (
+          <li key={r.loinc_num}>
+            <ResultCard result={r} onSelect={onSelect} index={i} />
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
