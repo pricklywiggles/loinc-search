@@ -1,9 +1,14 @@
 # LOINC Search
 
+**Live: [loinc.fractal.ly](https://loinc.fractal.ly)**
+
 Searchable web app for the [LOINC](https://loinc.org/) codebook. Type a name (`blood urea nitrogen`), a synonym (`GFR, Blood`), or a LOINC code (`98979-8`) and the app returns the matching record. Deprecated codes auto-redirect to their active replacement.
 
 Built with Next.js 16 (App Router), TypeScript, TailwindCSS, and Neon Postgres (`pg_trgm` + `tsvector` for ranked full-text + trigram search). Source code is MIT-licensed; see [LICENSE](LICENSE). LOINC and UCUM data surfaced by the app remain under their own licenses; see [NOTICE](NOTICE).
 
+If you found this useful, buy me a coffee...
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L3L81X4KW7)
 ---
 
 ## Quick start
