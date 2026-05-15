@@ -1,16 +1,9 @@
 import { sql } from './db';
 import type { LookupResult, SearchResult } from '@/types/loinc';
 
-/**
- * Build a tsquery string from freeform user input using prefix matching on
- * every token. Returns null when the input contains no usable tokens.
- *
- * Why prefix matching: many LOINC shortnames pack multiple concepts into a
- * single token (e.g. "eGFRcr"). Without `:*`, a search for "egfr" misses
- * those rows entirely via @@ and only catches them through trigram fallback,
- * which produces no ts_rank signal and lets less-relevant exact-token matches
- * (e.g. oncology "EGFR c.2369C>T") dominate.
- */
+// Prefix matching (`:*` per token) so a search for "egfr" matches packed tokens
+// like "egfrcr" via @@. Without it, the @@ side returns nothing for kidney
+// eGFR rows and the ranking is dominated by exact-token oncology EGFR matches.
 function buildPrefixTsQuery(q: string): string | null {
   const tokens = q.match(/[A-Za-z0-9]+/g);
   if (!tokens || tokens.length === 0) return null;
@@ -57,12 +50,30 @@ export async function searchLoinc(q: string): Promise<SearchResult[]> {
 }
 
 export async function lookupLoinc(code: string): Promise<LookupResult | null> {
+  // Follow the alias chain (multi-hop deprecation exists — 32 chains in LOINC
+  // 2.82). Carries the original source + comment through so the UI still shows
+  // "you typed X, here's the active replacement Y". Depth-bounded to prevent
+  // accidental cycles.
   const aliasRows = (await sql`
-    SELECT source_code, target_code, comment
-    FROM map_to
-    WHERE source_code = ${code}
+    WITH RECURSIVE chain AS (
+      SELECT source_code AS original_source, target_code, comment AS original_comment, 1 AS depth
+      FROM map_to
+      WHERE source_code = ${code}
+      UNION ALL
+      SELECT c.original_source, m.target_code, c.original_comment, c.depth + 1
+      FROM map_to m
+      JOIN chain c ON m.source_code = c.target_code
+      WHERE c.depth < 10
+    )
+    SELECT original_source, target_code, original_comment
+    FROM chain
+    ORDER BY depth DESC
     LIMIT 1
-  `) as unknown as Array<{ source_code: string; target_code: string; comment: string | null }>;
+  `) as unknown as Array<{
+    original_source: string;
+    target_code: string;
+    original_comment: string | null;
+  }>;
 
   const alias = aliasRows[0];
   const targetCode = alias?.target_code ?? code;
@@ -91,7 +102,10 @@ export async function lookupLoinc(code: string): Promise<LookupResult | null> {
     consumer_names: synRows.map((r) => r.consumer_name),
   };
   if (alias) {
-    result.deprecated_alias = { source_code: alias.source_code, comment: alias.comment };
+    result.deprecated_alias = {
+      source_code: alias.original_source,
+      comment: alias.original_comment,
+    };
   }
   return result;
 }

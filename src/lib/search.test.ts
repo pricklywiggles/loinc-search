@@ -5,6 +5,9 @@ const EGFR_CKD_EPI_2021 = '98979-8';
 const BUN_ARTERIAL = '12961-9';
 const DEPRECATED_SOURCE = '1009-0';
 const DEPRECATED_TARGET = '1007-4';
+// 14473-3 → 14472-5 (DISCOURAGED) → 21191-2 (ACTIVE). Tests that the alias
+// chain is followed past intermediate non-ACTIVE hops.
+const MULTI_HOP_SOURCE = '14473-3';
 
 describe('searchLoinc', () => {
   it('ranks the kidney eGFR CKD-EPI 2021 code above oncology EGFR codes for "egfr"', async () => {
@@ -71,5 +74,14 @@ describe('lookupLoinc', () => {
   it('returns null for an unknown code', async () => {
     const hit = await lookupLoinc('00000-0');
     expect(hit).toBeNull();
+  });
+
+  it('follows multi-hop alias chains past non-ACTIVE intermediates', async () => {
+    const hit = await lookupLoinc(MULTI_HOP_SOURCE);
+    expect(hit).not.toBeNull();
+    expect(hit!.status).toBe('ACTIVE');
+    expect(hit!.deprecated_alias).toBeDefined();
+    expect(hit!.deprecated_alias!.source_code).toBe(MULTI_HOP_SOURCE);
+    expect(hit!.loinc_num).not.toBe(MULTI_HOP_SOURCE);
   });
 });

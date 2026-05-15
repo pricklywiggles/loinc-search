@@ -113,19 +113,51 @@ async function main() {
     `);
     await client.query('DROP TABLE loinc_raw');
 
+    // Stage map_to and consumer_names through TEMP tables whose column names
+    // match the LOINC CSV headers (case-insensitively), then INSERT … SELECT
+    // into our schema-named columns. HEADER MATCH (PG 16+) validates header
+    // names against the temp table at COPY time so a future LOINC release
+    // reordering or renaming columns errors loudly instead of silently
+    // mismapping. The main `loinc` import does the same staging dance above
+    // (without HEADER MATCH because our snake_case names don't match LOINC's
+    // mixed-case header names there).
+    // HEADER MATCH is case-sensitive, so the temp table columns are quoted
+    // identifiers matching the LOINC CSV header case verbatim.
     console.log('Loading map_to…');
+    await client.query('DROP TABLE IF EXISTS map_to_raw');
+    await client.query(`
+      CREATE TEMP TABLE map_to_raw (
+        "LOINC" TEXT, "MAP_TO" TEXT, "COMMENT" TEXT
+      )
+    `);
     await copyCsv(
       client,
-      `COPY map_to (source_code, target_code, comment) FROM STDIN WITH (FORMAT csv, HEADER true)`,
+      `COPY map_to_raw FROM STDIN WITH (FORMAT csv, HEADER MATCH)`,
       MAPTO_CSV
     );
+    await client.query(`
+      INSERT INTO map_to (source_code, target_code, comment)
+      SELECT "LOINC", "MAP_TO", NULLIF("COMMENT", '') FROM map_to_raw
+    `);
+    await client.query('DROP TABLE map_to_raw');
 
     console.log('Loading consumer_names…');
+    await client.query('DROP TABLE IF EXISTS consumer_names_raw');
+    await client.query(`
+      CREATE TEMP TABLE consumer_names_raw (
+        "LoincNumber" TEXT, "ConsumerName" TEXT
+      )
+    `);
     await copyCsv(
       client,
-      `COPY consumer_names (loinc_num, consumer_name) FROM STDIN WITH (FORMAT csv, HEADER true)`,
+      `COPY consumer_names_raw FROM STDIN WITH (FORMAT csv, HEADER MATCH)`,
       CONSUMER_CSV
     );
+    await client.query(`
+      INSERT INTO consumer_names (loinc_num, consumer_name)
+      SELECT "LoincNumber", "ConsumerName" FROM consumer_names_raw
+    `);
+    await client.query('DROP TABLE consumer_names_raw');
 
     await client.query('COMMIT');
 
