@@ -69,21 +69,51 @@ export default function Home() {
   );
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-4 py-10">
-      <header className="mb-6">
-        <h1 className="text-3xl font-semibold text-gray-900">LOINC Search</h1>
-        <p className="mt-1 text-sm text-gray-600">
-          Search by name, synonym, or LOINC code. ACTIVE results only — paste a deprecated
-          code to redirect to its active replacement.
-        </p>
+    <main className="mx-auto w-full max-w-3xl px-6 pt-14 md:pt-20 pb-16">
+      <header className="mb-16 md:mb-24 flex items-baseline gap-2.5">
+        <span aria-hidden className="text-[color:var(--brass)] text-xs">
+          ❖
+        </span>
+        <span className="font-display text-base leading-none text-[color:var(--paper-bright)]">
+          LOINC
+          <span className="font-medium text-[color:var(--paper-muted)]"> / search</span>
+        </span>
       </header>
 
-      <SearchInput onChange={fetchFor} />
+      <section>
+        <h1 className="font-display-tight text-5xl md:text-6xl leading-[0.92] text-[color:var(--paper-bright)]">
+          LOINC code
+          <span className="text-[color:var(--brass)]"> search</span>
+        </h1>
+        <p className="mt-6 max-w-xl text-sm leading-relaxed text-[color:var(--paper-muted)]">
+          Search the codebook by name, synonym, or LOINC number. Active records
+          only — deprecated codes redirect to their current replacement.
+        </p>
+      </section>
 
-      <section className="mt-6">
-        {state.kind === 'idle' && <EmptyState query="" />}
+      <div className="mt-12 md:mt-16">
+        <SearchInput onChange={fetchFor} />
+      </div>
+
+      <section className="mt-12 md:mt-16">
         {state.kind === 'loading' && (
-          <p className="text-sm text-gray-500">Searching…</p>
+          <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.22em] text-[color:var(--paper-muted)]">
+            Searching
+            <span aria-hidden className="inline-flex gap-1">
+              <span
+                className="animate-blink h-1 w-1 rounded-full bg-[color:var(--brass)]"
+                style={{ animationDelay: '0ms' }}
+              />
+              <span
+                className="animate-blink h-1 w-1 rounded-full bg-[color:var(--brass)]"
+                style={{ animationDelay: '180ms' }}
+              />
+              <span
+                className="animate-blink h-1 w-1 rounded-full bg-[color:var(--brass)]"
+                style={{ animationDelay: '360ms' }}
+              />
+            </span>
+          </p>
         )}
         {state.kind === 'empty' && <EmptyState query={state.query} />}
         {state.kind === 'error' && <ErrorState message={state.message} />}
