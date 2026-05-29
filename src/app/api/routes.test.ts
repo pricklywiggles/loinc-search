@@ -42,17 +42,26 @@ describe('GET /api/search', () => {
     expect(body[0].loinc_num).toBe(KNOWN_ACTIVE);
   });
 
-  it('returns one result group per q when multiple q params are passed', async () => {
+  it('returns one result group per q when multiple q params are passed, with cache header', async () => {
     const res = await searchGET(
       req(`/api/search?q=${KNOWN_ACTIVE}&q=blood+urea+nitrogen`)
     );
     expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(CACHE_RE);
     const body = (await res.json()) as Array<Array<{ loinc_num: string }>>;
     expect(Array.isArray(body)).toBe(true);
     expect(body).toHaveLength(2);
     expect(body[0]).toHaveLength(1);
     expect(body[0][0].loinc_num).toBe(KNOWN_ACTIVE);
     expect(body[1].length).toBeGreaterThan(0);
+  });
+
+  it('accepts a batch of exactly 50 q params (cap boundary)', async () => {
+    const qs = Array.from({ length: 50 }, () => `q=${KNOWN_ACTIVE}`).join('&');
+    const res = await searchGET(req(`/api/search?${qs}`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as unknown[];
+    expect(body).toHaveLength(50);
   });
 
   it('rejects a batch exceeding the cap with 400', async () => {
@@ -97,10 +106,22 @@ describe('GET /api/loinc', () => {
       consumer_names: string[];
       deprecated_alias?: unknown;
     };
+    // Pins the single-input contract: bare object, never a 1-element array.
+    expect(Array.isArray(body)).toBe(false);
     expect(body.loinc_num).toBe(KNOWN_ACTIVE);
     expect(body.status).toBe('ACTIVE');
     expect(body.consumer_names.length).toBeGreaterThan(0);
     expect(body.deprecated_alias).toBeUndefined();
+  });
+
+  it('treats a trailing comma as single-input (drops the empty fragment)', async () => {
+    const res = await loincGET(req(`/api/loinc?code=${KNOWN_ACTIVE},`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      loinc_num: string;
+    };
+    expect(Array.isArray(body)).toBe(false);
+    expect(body.loinc_num).toBe(KNOWN_ACTIVE);
   });
 
   it('redirects a deprecated code to its target with deprecated_alias populated', async () => {
@@ -161,9 +182,23 @@ describe('GET /api/loinc', () => {
     expect(body[1]).toBeNull();
   });
 
-  it('rejects a batch exceeding the cap with 400', async () => {
+  it('accepts a batch of exactly 50 codes (cap boundary)', async () => {
+    const codes = Array.from({ length: 50 }, () => `code=${KNOWN_ACTIVE}`).join('&');
+    const res = await loincGET(req(`/api/loinc?${codes}`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as unknown[];
+    expect(body).toHaveLength(50);
+  });
+
+  it('rejects a batch exceeding the cap with 400 (repeated-param form)', async () => {
     const codes = Array.from({ length: 51 }, () => `code=${KNOWN_ACTIVE}`).join('&');
     const res = await loincGET(req(`/api/loinc?${codes}`));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a batch exceeding the cap with 400 (comma-expanded form)', async () => {
+    const codes = Array.from({ length: 51 }, () => KNOWN_ACTIVE).join(',');
+    const res = await loincGET(req(`/api/loinc?code=${codes}`));
     expect(res.status).toBe(400);
   });
 });
