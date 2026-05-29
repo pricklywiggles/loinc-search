@@ -239,7 +239,7 @@ GET /api/loinc?code=<51 codes>
 → 400  { error: "Too many codes (max 50)" }
 ```
 
-`null` in a batch slot means **could not resolve** — either the input was malformed *or* there's no matching row. Callers that need to tell those apart should pre-validate against `^\d{1,7}-\d$`.
+`null` in a batch slot means **could not resolve** — the input was malformed, there's no matching row, *or* the lookup hit a transient backend error (logged server-side). To separate malformed input from the rest, pre-validate against `^\d{1,7}-\d$`. Note the asymmetry with single-input: per-item failures are swallowed in batch mode, so a backend outage degrades a batch request to `200` with every slot `null` instead of the `500` the single-input path returns — don't treat an all-`null` batch as authoritative absence.
 
 ### Response types
 
