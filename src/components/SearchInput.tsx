@@ -1,26 +1,17 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 
 export const LOINC_CODE_RE = /^\d{1,7}-\d$/;
 
 export function SearchInput({
-  onChange,
-  initial = '',
-  debounceMs = 250,
+  value,
+  onValueChange,
 }: {
-  onChange: (q: string) => void;
-  initial?: string;
-  debounceMs?: number;
+  value: string;
+  onValueChange: (v: string) => void;
 }) {
-  const [value, setValue] = useState(initial);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const trimmed = value.trim();
-    const id = setTimeout(() => onChange(trimmed), debounceMs);
-    return () => clearTimeout(id);
-  }, [value, debounceMs, onChange]);
 
   return (
     <div className="flex items-center gap-3 rounded-full border border-[color:var(--rule-strong)] bg-[color:var(--ink-raised)] pl-6 pr-3 py-3 md:py-4 transition-colors duration-200 focus-within:border-[color:var(--brass)]">
@@ -29,7 +20,7 @@ export function SearchInput({
         ref={inputRef}
         type="search"
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => onValueChange(e.target.value)}
         autoFocus
         spellCheck={false}
         aria-label="Search LOINC by name, synonym, or code"
@@ -39,7 +30,7 @@ export function SearchInput({
         <button
           type="button"
           onClick={() => {
-            setValue('');
+            onValueChange('');
             inputRef.current?.focus();
           }}
           aria-label="Clear search"

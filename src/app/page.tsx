@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
 import { ResultsList } from '@/components/ResultsList';
@@ -16,57 +16,80 @@ type State =
   | { kind: 'empty'; query: string }
   | { kind: 'error'; query: string; message: string };
 
+const DEBOUNCE_MS = 250;
+
 export default function Home() {
+  const [query, setQuery] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle' });
   const reqId = useRef(0);
 
-  const fetchFor = useCallback(async (query: string) => {
-    if (!query) {
-      setState({ kind: 'idle' });
-      return;
-    }
-    const myId = ++reqId.current;
-    setState({ kind: 'loading', query });
-
-    try {
-      if (LOINC_CODE_RE.test(query)) {
-        const res = await fetch(`/api/loinc?code=${encodeURIComponent(query)}`);
-        if (myId !== reqId.current) return;
-        if (res.status === 404) {
-          setState({ kind: 'empty', query });
-          return;
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as LookupResult;
-        setState({ kind: 'single', query, result: data });
-        return;
-      }
-
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-      if (myId !== reqId.current) return;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as SearchResult[];
-      if (data.length === 0) {
-        setState({ kind: 'empty', query });
-      } else {
-        setState({ kind: 'list', query, results: data });
-      }
-    } catch (e) {
-      if (myId !== reqId.current) return;
-      setState({
-        kind: 'error',
-        query,
-        message: e instanceof Error ? e.message : 'Unknown error',
-      });
-    }
+  // Seed from ?q= on first client mount. A useState initializer would cause a
+  // hydration mismatch (server renders with '', client would render with the
+  // URL value). useSyncExternalStore is the canonical hook for external state
+  // but is overkill for a one-time read.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q') ?? '';
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (q) setQuery(q);
   }, []);
 
-  const handleSelect = useCallback(
-    (code: string) => {
-      void fetchFor(code);
-    },
-    [fetchFor]
-  );
+  useEffect(() => {
+    const trimmed = query.trim();
+    const id = setTimeout(() => {
+      const url = new URL(window.location.href);
+      if (trimmed) url.searchParams.set('q', trimmed);
+      else url.searchParams.delete('q');
+      window.history.replaceState(null, '', url);
+
+      if (!trimmed) {
+        setState({ kind: 'idle' });
+        return;
+      }
+      const myId = ++reqId.current;
+      setState({ kind: 'loading', query: trimmed });
+
+      const isCode = LOINC_CODE_RE.test(trimmed);
+      const endpoint = isCode
+        ? `/api/loinc?code=${encodeURIComponent(trimmed)}`
+        : `/api/search?q=${encodeURIComponent(trimmed)}`;
+
+      fetch(endpoint)
+        .then(async (res) => {
+          if (myId !== reqId.current) return;
+          if (isCode && res.status === 404) {
+            setState({ kind: 'empty', query: trimmed });
+            return;
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (isCode) {
+            const data = (await res.json()) as LookupResult;
+            if (myId !== reqId.current) return;
+            setState({ kind: 'single', query: trimmed, result: data });
+          } else {
+            const data = (await res.json()) as SearchResult[];
+            if (myId !== reqId.current) return;
+            setState(
+              data.length === 0
+                ? { kind: 'empty', query: trimmed }
+                : { kind: 'list', query: trimmed, results: data }
+            );
+          }
+        })
+        .catch((e: unknown) => {
+          if (myId !== reqId.current) return;
+          setState({
+            kind: 'error',
+            query: trimmed,
+            message: e instanceof Error ? e.message : 'Unknown error',
+          });
+        });
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  const handleSelect = useCallback((code: string) => {
+    setQuery(code);
+  }, []);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-6 pt-14 md:pt-20 pb-16">
@@ -92,7 +115,7 @@ export default function Home() {
       </section>
 
       <div className="mt-12 md:mt-16">
-        <SearchInput onChange={fetchFor} />
+        <SearchInput value={query} onValueChange={setQuery} />
       </div>
 
       <section className="mt-12 md:mt-16">
