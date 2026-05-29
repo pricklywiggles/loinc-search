@@ -132,8 +132,8 @@ loinc-search/
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── search/route.ts      GET /api/search?q=… (zod-validated)
-│   │   │   └── loinc/route.ts       GET /api/loinc?code=… (zod-validated)
+│   │   │   ├── search/route.ts      GET /api/search?q=… (single or batch, zod-validated)
+│   │   │   └── loinc/route.ts       GET /api/loinc?code=… (single or batch, zod-validated)
 │   │   ├── layout.tsx
 │   │   └── page.tsx                 Single-input search UI
 │   ├── components/                  SearchInput, ResultCard, SingleResultView, StatusBadge, …
@@ -165,12 +165,128 @@ For lookup (paste a code), `lookupLoinc(code)` resolves one hop through `map_to`
 
 ## API
 
-| Endpoint | Behaviour |
-| --- | --- |
-| `GET /api/search?q=…` | Returns up to 20 ranked `SearchResult` objects. If `q` matches `^\d{1,7}-\d$`, server-side falls through to lookup. Validates with `zod` (1–200 chars). |
-| `GET /api/loinc?code=…` | Returns a `LookupResult` or 404. Validates `code` against the LOINC pattern. Joins `consumer_names`; populates `deprecated_alias` when the code is a `map_to` source. |
+Two read-only endpoints. Both accept a **single input** or a **batch** of inputs; the single-input response shape and status codes are unchanged from earlier versions of this app.
+
+Per-item validation failures behave differently between the two modes: single-input is strict (invalid input → `400`), batch is lenient (invalid item → `null`/`[]` in that slot, rest of the batch still resolves). Structural failures — missing param entirely, or batch over the cap — always return `400`. Cap is **50 items per request** on both endpoints.
 
 Both endpoints set `Cache-Control: public, s-maxage=60, stale-while-revalidate=300`.
+
+### `GET /api/search?q=…`
+
+Free-text search ranked over `component`, `shortname`, `long_common_name`, `related_names`, with a synonym signal from `consumer_names` (see [Ranking model](#ranking-model)). When `q` matches `^\d{1,7}-\d$` the server transparently routes to lookup so paste-a-code returns the full record. Each `q` is zod-validated as 1–200 chars after trim.
+
+**Single-input**
+
+```
+GET /api/search?q=blood+urea+nitrogen
+→ 200  SearchResult[]                          # up to 20, ranked desc by score
+
+GET /api/search?q=98979-8                      # auto-routed to lookup
+→ 200  [LookupResult]                          # 0- or 1-element array
+
+GET /api/search                                # missing
+GET /api/search?q=                             # empty after trim
+GET /api/search?q=<201 chars>                  # too long
+→ 400  { error: "Invalid query" }
+```
+
+**Batch** — repeat the `q` param. Commas inside a `q` are kept literal because text searches legitimately contain them (`"blood, urea, nitrogen"`).
+
+```
+GET /api/search?q=blood+urea&q=98979-8
+→ 200  (SearchResult[] | LookupResult[])[]     # one group per q, in input order
+
+GET /api/search?q=foo&q=                       # second q invalid
+→ 200  [[...results], []]                      # invalid slot becomes []
+
+GET /api/search?q=<51 q's>
+→ 400  { error: "Too many queries (max 50)" }
+```
+
+### `GET /api/loinc?code=…`
+
+Exact-code lookup. Resolves through `map_to` (multi-hop, depth-bounded at 10) so a deprecated code lands on its active replacement with `deprecated_alias.source_code` populated. Joins `consumer_names`. Each code is validated against `^\d{1,7}-\d$`.
+
+**Single-input**
+
+```
+GET /api/loinc?code=98979-8
+→ 200  LookupResult
+
+GET /api/loinc?code=1009-0                     # deprecated → active replacement
+→ 200  LookupResult                            # deprecated_alias.source_code = "1009-0"
+
+GET /api/loinc?code=00000-0                    # valid format, no row
+→ 404  { error: "Not found" }
+
+GET /api/loinc                                 # missing
+GET /api/loinc?code=notacode                   # invalid format
+→ 400  { error: "Invalid LOINC code" }
+```
+
+**Batch** — repeat the `code` param, comma-separate, or mix freely. LOINC codes can't contain commas, so the split is unambiguous.
+
+```
+GET /api/loinc?code=98979-8&code=1009-0
+GET /api/loinc?code=98979-8,1009-0
+GET /api/loinc?code=98979-8,1009-0&code=00000-0
+→ 200  (LookupResult | null)[]                 # one slot per input, in input order
+
+GET /api/loinc?code=98979-8&code=notacode      # second code invalid
+→ 200  [LookupResult, null]                    # null = "couldn't resolve"
+
+GET /api/loinc?code=<51 codes>
+→ 400  { error: "Too many codes (max 50)" }
+```
+
+`null` in a batch slot means **could not resolve** — either the input was malformed *or* there's no matching row. Callers that need to tell those apart should pre-validate against `^\d{1,7}-\d$`.
+
+### Response types
+
+```ts
+type LoincStatus = 'ACTIVE' | 'TRIAL' | 'DEPRECATED' | 'DISCOURAGED';
+
+interface SearchResult {
+  loinc_num: string;
+  component: string;
+  shortname: string | null;
+  long_common_name: string | null;
+  system: string;
+  example_units: string | null;
+  ucum_units: string | null;
+  status: LoincStatus;
+  external_copyright_notice: string | null;
+  score: number;
+}
+
+interface LookupResult {
+  loinc_num: string;
+  component: string;
+  property: string;
+  time_aspct: string;
+  system: string;
+  scale_typ: string;
+  method_typ: string | null;
+  class: string;
+  status: LoincStatus;
+  shortname: string | null;
+  long_common_name: string | null;
+  related_names: string | null;
+  example_units: string | null;
+  ucum_units: string | null;
+  definition: string | null;
+  version_first_released: string | null;
+  version_last_changed: string | null;
+  external_copyright_notice: string | null;
+  consumer_names: string[];
+  deprecated_alias?: {
+    source_code: string;
+    comment: string | null;
+  };
+}
+```
+
+The canonical definitions live in [`src/types/loinc.ts`](src/types/loinc.ts).
 
 ---
 
@@ -193,9 +309,7 @@ Both endpoints set `Cache-Control: public, s-maxage=60, stale-while-revalidate=3
 Two suites, both run against the Neon dev branch via `pnpm test`:
 
 - **`src/lib/search.test.ts`** — `searchLoinc` and `lookupLoinc` against real data: `egfr` ranks kidney CKD-EPI 2021 codes above oncology EGFR mutations; `DEPRECATED`/`DISCOURAGED` rows are excluded from search; `TRIAL` rows score half; deprecated codes redirect to their target with `deprecated_alias.source_code` populated; unknown codes return `null`.
-- **`src/app/api/routes.test.ts`** — API route handlers called directly with `Request` objects: input validation (400 on missing/invalid/too-long input), 404 on unknown codes, 200 with proper response shape and `Cache-Control` headers, search auto-routes to lookup when `q` matches the LOINC code pattern.
-
-17 tests total.
+- **`src/app/api/routes.test.ts`** — API route handlers called directly with `Request` objects: single-input validation (400 on missing/invalid/too-long input), 404 on unknown codes, 200 with proper response shape and `Cache-Control` headers, search auto-routes to lookup when `q` matches the LOINC code pattern, batch endpoints (repeated params, comma-separated codes, per-item `null`/`[]` for invalid entries, 400 when over the 50-item cap).
 
 ---
 
