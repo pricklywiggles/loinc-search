@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { lookupLoinc } from '@/lib/search';
+import type { LookupResult } from '@/types/loinc';
 
 const CodeSchema = z.string().regex(/^\d{1,7}-\d$/);
 const MAX_BATCH = 50;
@@ -11,11 +12,16 @@ function parseList(searchParams: URLSearchParams, key: string): string[] {
   return searchParams.getAll(key).flatMap((v) => v.split(',').map((s) => s.trim()));
 }
 
+async function lookupOrNull(code: string): Promise<LookupResult | null> {
+  if (!CodeSchema.safeParse(code).success) return null;
+  return lookupLoinc(code);
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const items = parseList(searchParams, 'code');
 
-  if (items.length === 0 || items.some((s) => s.length === 0)) {
+  if (items.length === 0) {
     return NextResponse.json({ error: 'Invalid LOINC code' }, { status: 400 });
   }
   if (items.length > MAX_BATCH) {
@@ -25,14 +31,13 @@ export async function GET(req: Request) {
     );
   }
 
-  const parsed = z.array(CodeSchema).safeParse(items);
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid LOINC code' }, { status: 400 });
-  }
-
   try {
-    if (parsed.data.length === 1) {
-      const hit = await lookupLoinc(parsed.data[0]);
+    if (items.length === 1) {
+      const code = items[0];
+      if (!CodeSchema.safeParse(code).success) {
+        return NextResponse.json({ error: 'Invalid LOINC code' }, { status: 400 });
+      }
+      const hit = await lookupLoinc(code);
       if (!hit) {
         return NextResponse.json({ error: 'Not found' }, { status: 404 });
       }
@@ -41,7 +46,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const hits = await Promise.all(parsed.data.map((c) => lookupLoinc(c)));
+    const hits = await Promise.all(items.map(lookupOrNull));
     return NextResponse.json(hits, {
       headers: { 'Cache-Control': CACHE_HEADER },
     });

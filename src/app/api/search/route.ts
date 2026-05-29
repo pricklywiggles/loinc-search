@@ -17,6 +17,12 @@ async function runOne(q: string): Promise<SearchResult[] | LookupResult[]> {
   return searchLoinc(q);
 }
 
+async function runOneOrEmpty(q: string): Promise<SearchResult[] | LookupResult[]> {
+  const parsed = QSchema.safeParse(q);
+  if (!parsed.success) return [];
+  return runOne(parsed.data);
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const raw = searchParams.getAll('q');
@@ -31,15 +37,20 @@ export async function GET(req: Request) {
     );
   }
 
-  const parsed = z.array(QSchema).safeParse(raw);
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid query' }, { status: 400 });
-  }
-
   try {
-    const groups = await Promise.all(parsed.data.map(runOne));
-    const body = parsed.data.length === 1 ? groups[0] : groups;
-    return NextResponse.json(body, {
+    if (raw.length === 1) {
+      const parsed = QSchema.safeParse(raw[0]);
+      if (!parsed.success) {
+        return NextResponse.json({ error: 'Invalid query' }, { status: 400 });
+      }
+      const rows = await runOne(parsed.data);
+      return NextResponse.json(rows, {
+        headers: { 'Cache-Control': CACHE_HEADER },
+      });
+    }
+
+    const groups = await Promise.all(raw.map(runOneOrEmpty));
+    return NextResponse.json(groups, {
       headers: { 'Cache-Control': CACHE_HEADER },
     });
   } catch (err) {

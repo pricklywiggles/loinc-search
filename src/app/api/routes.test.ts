@@ -61,9 +61,13 @@ describe('GET /api/search', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects a multi-q batch where any q is invalid with 400', async () => {
-    const res = await searchGET(req('/api/search?q=foo&q='));
-    expect(res.status).toBe(400);
+  it('returns an empty group for invalid q entries in a multi-q batch (does not fail the batch)', async () => {
+    const res = await searchGET(req('/api/search?q=blood+urea+nitrogen&q='));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<Array<{ loinc_num: string }>>;
+    expect(body).toHaveLength(2);
+    expect(body[0].length).toBeGreaterThan(0);
+    expect(body[1]).toEqual([]);
   });
 });
 
@@ -146,11 +150,15 @@ describe('GET /api/loinc', () => {
     expect(body).toHaveLength(3);
   });
 
-  it('rejects a multi-code batch where any code is invalid with 400', async () => {
+  it('returns null for invalid code entries in a multi-code batch (does not fail the batch)', async () => {
     const res = await loincGET(
       req(`/api/loinc?code=${KNOWN_ACTIVE}&code=notacode`)
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<null | { loinc_num: string }>;
+    expect(body).toHaveLength(2);
+    expect(body[0]?.loinc_num).toBe(KNOWN_ACTIVE);
+    expect(body[1]).toBeNull();
   });
 
   it('rejects a batch exceeding the cap with 400', async () => {
