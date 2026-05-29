@@ -224,7 +224,7 @@ GET /api/loinc?code=notacode                   # invalid format
 → 400  { error: "Invalid LOINC code" }
 ```
 
-**Batch** — repeat the `code` param, comma-separate, or mix freely. LOINC codes can't contain commas, so the split is unambiguous.
+**Batch** — repeat the `code` param, comma-separate, or mix freely. Empty fragments from stray or trailing commas are dropped before validation, so `?code=A,` is equivalent to `?code=A` (single-input contract, not a phantom 2-element batch).
 
 ```
 GET /api/loinc?code=98979-8&code=1009-0

@@ -49,12 +49,17 @@ export async function GET(req: Request) {
       });
     }
 
-    const groups = await Promise.all(raw.map(runOneOrEmpty));
+    const settled = await Promise.allSettled(raw.map(runOneOrEmpty));
+    const groups = settled.map((s, i) => {
+      if (s.status === 'fulfilled') return s.value;
+      console.error('search batch item failed', { q: raw[i], err: s.reason });
+      return [];
+    });
     return NextResponse.json(groups, {
       headers: { 'Cache-Control': CACHE_HEADER },
     });
   } catch (err) {
-    console.error('search route error', err);
+    console.error('search route error', { batchSize: raw.length, err });
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

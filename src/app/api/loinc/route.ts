@@ -9,7 +9,9 @@ const MAX_BATCH = 50;
 const CACHE_HEADER = 'public, s-maxage=60, stale-while-revalidate=300';
 
 function parseList(searchParams: URLSearchParams, key: string): string[] {
-  return searchParams.getAll(key).flatMap((v) => v.split(',').map((s) => s.trim()));
+  return searchParams
+    .getAll(key)
+    .flatMap((v) => v.split(',').map((s) => s.trim()).filter(Boolean));
 }
 
 async function lookupOrNull(code: string): Promise<LookupResult | null> {
@@ -46,12 +48,17 @@ export async function GET(req: Request) {
       });
     }
 
-    const hits = await Promise.all(items.map(lookupOrNull));
+    const settled = await Promise.allSettled(items.map(lookupOrNull));
+    const hits = settled.map((s, i) => {
+      if (s.status === 'fulfilled') return s.value;
+      console.error('loinc batch item failed', { code: items[i], err: s.reason });
+      return null;
+    });
     return NextResponse.json(hits, {
       headers: { 'Cache-Control': CACHE_HEADER },
     });
   } catch (err) {
-    console.error('loinc route error', err);
+    console.error('loinc route error', { batchSize: items.length, err });
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }
