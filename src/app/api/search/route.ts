@@ -77,6 +77,12 @@ export async function GET(req: Request) {
     }
 
     const settled = await mapWithLimit(raw, MAX_CONCURRENT, runOneOrEmpty);
+    // Total-failure is almost always an outage, not a per-query problem; surface it
+    // loudly so clients and dashboards can't mistake it for "no results".
+    if (settled.every((s) => s.status === 'rejected')) {
+      console.error('search batch fully failed', { batchSize: raw.length });
+      return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+    }
     const groups = settled.map((s, i) => {
       if (s.status === 'fulfilled') return s.value;
       console.error('search batch item failed', { q: raw[i], err: s.reason });

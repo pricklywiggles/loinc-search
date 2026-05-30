@@ -63,6 +63,20 @@ describe('batch endpoints surface backend failures', () => {
     errSpy.mockRestore();
   });
 
+  it('/api/search: a fully-failed batch returns 500 instead of all-empty groups', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockSearch.mockRejectedValue(new Error('neon down'));
+
+    const res = await searchGET(req('/api/search?q=foo&q=bar&q=baz'));
+
+    expect(res.status).toBe(500);
+    expect(errSpy).toHaveBeenCalledWith(
+      'search batch fully failed',
+      expect.objectContaining({ batchSize: 3 })
+    );
+    errSpy.mockRestore();
+  });
+
   it('/api/loinc: preserves input order when the batch query returns mixed hits and misses', async () => {
     mockLookupMany.mockResolvedValue([
       { loinc_num: CODE_A } as unknown as LookupResult,
