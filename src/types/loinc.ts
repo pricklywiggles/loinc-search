@@ -5,7 +5,9 @@ export interface SearchResult {
   component: string;
   shortname: string | null;
   long_common_name: string | null;
+  related_names: string | null;
   system: string;
+  scale_typ: string;
   example_units: string | null;
   ucum_units: string | null;
   status: LoincStatus;
