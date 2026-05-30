@@ -6,8 +6,7 @@ import type { LookupResult, SearchResult } from '@/types/loinc';
 const LOINC_CODE_RE = /^\d{1,7}-\d$/;
 const QSchema = z.string().trim().min(1).max(200);
 const MAX_BATCH = 50;
-// Bounded fan-out to keep Neon Free-tier connection budget happy while still
-// leaving room for concurrent batches from multiple clients.
+// Bounded fan-out so one 50-item batch can't stampede Neon or starve concurrent requests.
 const MAX_CONCURRENT = 8;
 
 const CACHE_HEADER = 'public, s-maxage=60, stale-while-revalidate=300';

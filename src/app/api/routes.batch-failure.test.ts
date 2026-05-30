@@ -64,8 +64,6 @@ describe('batch endpoints surface backend failures', () => {
   });
 
   it('/api/loinc: preserves input order when the batch query returns mixed hits and misses', async () => {
-    // Sanity-check the position re-injection: invalid codes get filtered out of
-    // the SQL call, so their slots have to be reinjected on the route side.
     mockLookupMany.mockResolvedValue([
       { loinc_num: CODE_A } as unknown as LookupResult,
       null,
@@ -86,9 +84,7 @@ describe('batch endpoints surface backend failures', () => {
 describe('/api/search bounded concurrency', () => {
   it('preserves input order even when later items resolve before earlier ones', async () => {
     const N = 20;
-    // Reverse the natural resolution order: index 0 sleeps longest, index N-1
-    // sleeps shortest. If ordering relied on completion time, the response
-    // would come back reversed.
+    // Sleep inversely to index so completion order can't accidentally satisfy the assertion.
     mockSearch.mockImplementation(async (q: string) => {
       const idx = Number(q.slice(1));
       await new Promise((r) => setTimeout(r, (N - idx) * 2));
@@ -119,7 +115,6 @@ describe('/api/search bounded concurrency', () => {
     const qs = Array.from({ length: 30 }, (_, i) => `q=i${i}`).join('&');
     const res = await searchGET(req(`/api/search?${qs}`));
     expect(res.status).toBe(200);
-    // Peak should be at most the MAX_CONCURRENT constant in route.ts (8).
     expect(peak).toBeLessThanOrEqual(8);
     expect(peak).toBeGreaterThan(1);
   });

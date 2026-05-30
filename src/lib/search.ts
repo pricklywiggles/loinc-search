@@ -50,7 +50,6 @@ export async function searchLoinc(q: string): Promise<SearchResult[]> {
 }
 
 type LookupRow = {
-  pos: number;
   source: string;
   was_aliased: boolean;
   original_comment: string | null;
@@ -107,9 +106,7 @@ function rowToLookupResult(row: LookupRow): LookupResult | null {
   return result;
 }
 
-// Single round-trip multi-lookup. Seeds a recursive CTE from unnest(...) WITH
-// ORDINALITY so input position survives the joins; depth-bounded the same way
-// the single-input path was (LOINC 2.82 has 32 multi-hop chains).
+// Depth bound of 10 covers LOINC 2.82's 32 multi-hop alias chains with margin.
 export async function lookupLoincMany(
   codes: string[]
 ): Promise<Array<LookupResult | null>> {
@@ -121,11 +118,11 @@ export async function lookupLoincMany(
       FROM unnest(${codes}::text[]) WITH ORDINALITY AS t(code, pos)
     ),
     chain AS (
-      SELECT i.code AS original_source, i.pos, m.target_code, m.comment AS original_comment, 1 AS depth
+      SELECT i.code AS original_source, m.target_code, m.comment AS original_comment, 1 AS depth
       FROM input i
       JOIN map_to m ON m.source_code = i.code
       UNION ALL
-      SELECT c.original_source, c.pos, m.target_code, c.original_comment, c.depth + 1
+      SELECT c.original_source, m.target_code, c.original_comment, c.depth + 1
       FROM map_to m
       JOIN chain c ON m.source_code = c.target_code
       WHERE c.depth < 10
@@ -136,7 +133,6 @@ export async function lookupLoincMany(
       ORDER BY original_source, depth DESC
     )
     SELECT
-      i.pos,
       i.code AS source,
       fc.target_code IS NOT NULL AS was_aliased,
       fc.original_comment,

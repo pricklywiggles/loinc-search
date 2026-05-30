@@ -43,8 +43,7 @@ export async function GET(req: Request) {
       });
     }
 
-    // Pre-filter invalid codes so the SQL query only carries well-formed inputs.
-    // Their slots are reinjected as nulls afterwards to preserve input order.
+    // Invalid codes get null slots reinjected after the query to keep input order.
     const validIndices: number[] = [];
     const validCodes: string[] = [];
     items.forEach((code, idx) => {
