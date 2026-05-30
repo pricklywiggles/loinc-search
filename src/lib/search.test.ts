@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lookupLoinc, searchLoinc } from './search';
+import { lookupLoinc, lookupLoincMany, searchLoinc } from './search';
 
 const EGFR_CKD_EPI_2021 = '98979-8';
 const BUN_ARTERIAL = '12961-9';
@@ -83,5 +83,60 @@ describe('lookupLoinc', () => {
     expect(hit!.deprecated_alias).toBeDefined();
     expect(hit!.deprecated_alias!.source_code).toBe(MULTI_HOP_SOURCE);
     expect(hit!.loinc_num).not.toBe(MULTI_HOP_SOURCE);
+  });
+});
+
+describe('lookupLoincMany', () => {
+  it('returns [] for empty input without hitting the DB', async () => {
+    const results = await lookupLoincMany([]);
+    expect(results).toEqual([]);
+  });
+
+  it('returns a one-element array with the full record for a known active code', async () => {
+    const results = await lookupLoincMany([EGFR_CKD_EPI_2021]);
+    expect(results).toHaveLength(1);
+    expect(results[0]).not.toBeNull();
+    expect(results[0]!.loinc_num).toBe(EGFR_CKD_EPI_2021);
+    expect(results[0]!.status).toBe('ACTIVE');
+    expect(results[0]!.consumer_names.length).toBeGreaterThan(0);
+    expect(results[0]!.deprecated_alias).toBeUndefined();
+  });
+
+  it('redirects a deprecated code and exposes deprecated_alias.source_code', async () => {
+    const results = await lookupLoincMany([DEPRECATED_SOURCE]);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.loinc_num).toBe(DEPRECATED_TARGET);
+    expect(results[0]!.deprecated_alias!.source_code).toBe(DEPRECATED_SOURCE);
+  });
+
+  it('follows multi-hop alias chains in the batch path too', async () => {
+    const results = await lookupLoincMany([MULTI_HOP_SOURCE]);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.status).toBe('ACTIVE');
+    expect(results[0]!.deprecated_alias!.source_code).toBe(MULTI_HOP_SOURCE);
+    expect(results[0]!.loinc_num).not.toBe(MULTI_HOP_SOURCE);
+  });
+
+  it('preserves input order across a mix of known, unknown, and deprecated codes', async () => {
+    const results = await lookupLoincMany([
+      EGFR_CKD_EPI_2021,
+      '00000-0',
+      DEPRECATED_SOURCE,
+    ]);
+    expect(results).toHaveLength(3);
+    expect(results[0]!.loinc_num).toBe(EGFR_CKD_EPI_2021);
+    expect(results[1]).toBeNull();
+    expect(results[2]!.loinc_num).toBe(DEPRECATED_TARGET);
+    expect(results[2]!.deprecated_alias!.source_code).toBe(DEPRECATED_SOURCE);
+  });
+
+  it('returns a separate slot per duplicate input', async () => {
+    const results = await lookupLoincMany([
+      EGFR_CKD_EPI_2021,
+      EGFR_CKD_EPI_2021,
+    ]);
+    expect(results).toHaveLength(2);
+    expect(results[0]!.loinc_num).toBe(EGFR_CKD_EPI_2021);
+    expect(results[1]!.loinc_num).toBe(EGFR_CKD_EPI_2021);
   });
 });
