@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { lookupLoinc } from '@/lib/search';
+import { lookupLoincMany } from '@/lib/search';
 import type { LookupResult } from '@/types/loinc';
 
 const CodeSchema = z.string().regex(/^\d{1,7}-\d$/);
@@ -12,11 +12,6 @@ function parseList(searchParams: URLSearchParams, key: string): string[] {
   return searchParams
     .getAll(key)
     .flatMap((v) => v.split(',').map((s) => s.trim()).filter(Boolean));
-}
-
-async function lookupOrNull(code: string): Promise<LookupResult | null> {
-  if (!CodeSchema.safeParse(code).success) return null;
-  return lookupLoinc(code);
 }
 
 export async function GET(req: Request) {
@@ -39,7 +34,7 @@ export async function GET(req: Request) {
       if (!CodeSchema.safeParse(code).success) {
         return NextResponse.json({ error: 'Invalid LOINC code' }, { status: 400 });
       }
-      const hit = await lookupLoinc(code);
+      const [hit] = await lookupLoincMany([code]);
       if (!hit) {
         return NextResponse.json({ error: 'Not found' }, { status: 404 });
       }
@@ -48,12 +43,23 @@ export async function GET(req: Request) {
       });
     }
 
-    const settled = await Promise.allSettled(items.map(lookupOrNull));
-    const hits = settled.map((s, i) => {
-      if (s.status === 'fulfilled') return s.value;
-      console.error('loinc batch item failed', { code: items[i], err: s.reason });
-      return null;
+    // Pre-filter invalid codes so the SQL query only carries well-formed inputs.
+    // Their slots are reinjected as nulls afterwards to preserve input order.
+    const validIndices: number[] = [];
+    const validCodes: string[] = [];
+    items.forEach((code, idx) => {
+      if (CodeSchema.safeParse(code).success) {
+        validIndices.push(idx);
+        validCodes.push(code);
+      }
     });
+
+    const looked = await lookupLoincMany(validCodes);
+    const hits: (LookupResult | null)[] = new Array(items.length).fill(null);
+    validIndices.forEach((origIdx, i) => {
+      hits[origIdx] = looked[i];
+    });
+
     return NextResponse.json(hits, {
       headers: { 'Cache-Control': CACHE_HEADER },
     });

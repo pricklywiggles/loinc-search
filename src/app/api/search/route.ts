@@ -6,8 +6,36 @@ import type { LookupResult, SearchResult } from '@/types/loinc';
 const LOINC_CODE_RE = /^\d{1,7}-\d$/;
 const QSchema = z.string().trim().min(1).max(200);
 const MAX_BATCH = 50;
+// Bounded fan-out to keep Neon Free-tier connection budget happy while still
+// leaving room for concurrent batches from multiple clients.
+const MAX_CONCURRENT = 8;
 
 const CACHE_HEADER = 'public, s-maxage=60, stale-while-revalidate=300';
+
+async function mapWithLimit<T, U>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<U>
+): Promise<PromiseSettledResult<U>[]> {
+  const results: PromiseSettledResult<U>[] = new Array(items.length);
+  let i = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (true) {
+        const idx = i++;
+        if (idx >= items.length) return;
+        try {
+          results[idx] = { status: 'fulfilled', value: await fn(items[idx]) };
+        } catch (reason) {
+          results[idx] = { status: 'rejected', reason };
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+  return results;
+}
 
 async function runOne(q: string): Promise<SearchResult[] | LookupResult[]> {
   if (LOINC_CODE_RE.test(q)) {
@@ -49,7 +77,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const settled = await Promise.allSettled(raw.map(runOneOrEmpty));
+    const settled = await mapWithLimit(raw, MAX_CONCURRENT, runOneOrEmpty);
     const groups = settled.map((s, i) => {
       if (s.status === 'fulfilled') return s.value;
       console.error('search batch item failed', { q: raw[i], err: s.reason });
