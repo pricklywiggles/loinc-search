@@ -35,6 +35,22 @@ describe('normalizeUnit', () => {
     expect(normalizeUnit('[iU]/L')).toBe('[iu]/l');
     expect(normalizeUnit('U/L')).toBe('u/l');
   });
+
+  it('folds caret power notation to the UCUM star so count units match', () => {
+    expect(normalizeUnit('10^6/uL')).toBe('10*6/ul');
+    expect(normalizeUnit('10^3/uL')).toBe('10*3/ul');
+    expect(normalizeUnit('10^9/L')).toBe('10*9/l');
+    // already-UCUM star notation is left as-is
+    expect(normalizeUnit('10*6/uL')).toBe('10*6/ul');
+  });
+
+  it('folds mEq/L to mmol/L so electrolytes match LOINC stored units', () => {
+    expect(normalizeUnit('mEq/L')).toBe('mmol/l');
+    expect(normalizeUnit('MEQ/L')).toBe('mmol/l');
+    expect(normalizeUnit('meq/dL')).toBe('mmol/dl');
+    // mmol/L already canonical
+    expect(normalizeUnit('mmol/L')).toBe('mmol/l');
+  });
 });
 
 // Binds the TS normalizer (client input) and the Postgres function
@@ -59,6 +75,8 @@ describe('normalizeUnit ↔ loinc_normalize_unit() parity', () => {
     '%',
     'ug/g{Hb}',
     'mcg/g creat',
+    '10^6/uL',
+    'mEq/L',
   ];
 
   it('produces identical output element-wise', async () => {

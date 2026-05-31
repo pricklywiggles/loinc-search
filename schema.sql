@@ -6,7 +6,8 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- IMMUTABLE STRICT lets the planner cache and inline it.
 CREATE OR REPLACE FUNCTION loinc_normalize_unit(s text) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT AS $$
-  SELECT replace(replace(replace(lower(btrim(s)), 'μ', 'u'), 'µ', 'u'), 'mcg', 'ug')
+  SELECT replace(replace(replace(replace(replace(
+    lower(btrim(s)), 'μ', 'u'), 'µ', 'u'), 'mcg', 'ug'), '^', '*'), 'meq', 'mmol')
 $$;
 
 DROP TABLE IF EXISTS consumer_names;
@@ -35,6 +36,13 @@ CREATE TABLE loinc (
   -- Per-record third-party attribution required by the LOINC license when surfacing
   -- those records. Populated for ~6.7% of rows.
   external_copyright_notice TEXT,
+  -- Regenstrief's curated frequency ranks (lower = more commonly used; NULL/0 =
+  -- unranked). common_test_rank is the closest LOINC ships to a "primary
+  -- reportable code per analyte" signal, used by ranking as a bounded tiebreak.
+  -- classtype: 1=Laboratory, 2=Clinical, 3=Claims, 4=Survey.
+  common_test_rank       INTEGER,
+  common_order_rank      INTEGER,
+  classtype              INTEGER,
   search_text            TEXT GENERATED ALWAYS AS (
     COALESCE(component, '') || ' ' ||
     COALESCE(shortname, '') || ' ' ||

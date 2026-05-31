@@ -50,7 +50,16 @@ export async function searchLoinc(
             FROM consumer_names c
             WHERE c.loinc_num = l.loinc_num
           ), 0)
-      ) * CASE WHEN l.status = 'TRIAL' THEN 0.5 ELSE 1.0 END AS score
+      )
+      * CASE WHEN l.status = 'TRIAL' THEN 0.5 ELSE 1.0 END
+      -- Bounded multiplicative boost toward LOINC's common-test rank (lower rank =
+      -- more commonly reported; 0/NULL = unranked) so the analyte's primary
+      -- reportable code outranks lexical near-variants. Weight is provisional —
+      -- tune against a curated set, never the acceptance fixture.
+      * (1.0 + 0.6 * CASE
+          WHEN l.common_test_rank > 0
+          THEN GREATEST(0.0, 1.0 - ln(l.common_test_rank) / ln(20000.0))
+          ELSE 0.0 END) AS score
     FROM loinc l, q
     WHERE l.status IN ('ACTIVE', 'TRIAL')
       AND (l.search_vector @@ q.tsq OR l.search_text % q.raw)
