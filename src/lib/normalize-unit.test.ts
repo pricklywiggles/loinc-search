@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sql } from './db';
 import { normalizeUnit } from './normalize-unit';
 
 describe('normalizeUnit', () => {
@@ -33,5 +34,41 @@ describe('normalizeUnit', () => {
     expect(normalizeUnit('%')).toBe('%');
     expect(normalizeUnit('[iU]/L')).toBe('[iu]/l');
     expect(normalizeUnit('U/L')).toBe('u/l');
+  });
+});
+
+// Binds the TS normalizer (client input) and the Postgres function
+// loinc_normalize_unit (called by searchLoinc on stored ucum_units /
+// example_units). Both must produce identical strings for the filter to
+// match; calling the real DB function — not a hand-copied SQL chain — means
+// a future schema.sql change to the function fails here, too.
+describe('normalizeUnit ↔ loinc_normalize_unit() parity', () => {
+  const fixtures = [
+    'ng/mL',
+    'NG/ML',
+    '  ng/mL  ',
+    'mcg/dL',
+    'MCG/mL',
+    'μg/L',
+    'µg/L',
+    'μmol/L',
+    'mm Hg',
+    'mg/24 H',
+    'arb U/mL',
+    '[iU]/L',
+    '%',
+    'ug/g{Hb}',
+    'mcg/g creat',
+  ];
+
+  it('produces identical output element-wise', async () => {
+    const ts = fixtures.map((f) => normalizeUnit(f));
+    const rows = (await sql`
+      SELECT loinc_normalize_unit(u) AS normalized
+      FROM unnest(${fixtures}::text[]) WITH ORDINALITY AS t(u, pos)
+      ORDER BY pos
+    `) as unknown as Array<{ normalized: string }>;
+
+    expect(rows.map((r) => r.normalized)).toEqual(ts);
   });
 });

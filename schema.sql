@@ -1,5 +1,14 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- Mirrors src/lib/normalize-unit.ts. Single source of truth for the search
+-- unit-hint filter: both the TS side (client input) and the DB side
+-- (ucum_units / example_units) call this so the comparison can't drift.
+-- IMMUTABLE STRICT lets the planner cache and inline it.
+CREATE OR REPLACE FUNCTION loinc_normalize_unit(s text) RETURNS text
+LANGUAGE sql IMMUTABLE STRICT AS $$
+  SELECT replace(replace(replace(lower(btrim(s)), 'μ', 'u'), 'µ', 'u'), 'mcg', 'ug')
+$$;
+
 DROP TABLE IF EXISTS consumer_names;
 DROP TABLE IF EXISTS map_to;
 DROP TABLE IF EXISTS loinc;

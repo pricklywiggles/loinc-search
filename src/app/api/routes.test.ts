@@ -77,6 +77,18 @@ describe('GET /api/search', () => {
     expect(body.results.length).toBeGreaterThan(0);
   });
 
+  // If the query has no matches at all, the unit wasn't the cause of empty
+  // results — claiming a bypass would be misleading. Reports applied=true.
+  it('reports unitFilterApplied=true when both filtered and unfiltered queries are empty', async () => {
+    const res = await searchGET(
+      req(`/api/search?q=zzzzzqqqqzzzz&unit=${encodeURIComponent('ng/mL')}`)
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SearchEnvelope;
+    expect(body.results).toEqual([]);
+    expect(body.unitFilterApplied).toBe(true);
+  });
+
   it('rejects an oversized unit param with 400', async () => {
     const big = 'a'.repeat(51);
     const res = await searchGET(req(`/api/search?q=PSA&unit=${big}`));
@@ -144,6 +156,31 @@ describe('POST /api/search', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: SearchEnvelope[] };
     expect(body.items).toHaveLength(50);
+  });
+
+  // Mirrors /api/loinc batch behavior: a single malformed item collapses to
+  // an empty result in its slot rather than failing the whole batch.
+  it('returns { results: [] } for per-item validation failures without failing the batch', async () => {
+    const longUnit = 'a'.repeat(51);
+    const res = await searchPOST(
+      postReq({
+        items: [
+          { q: 'blood urea nitrogen' },
+          { q: '' },                          // empty q
+          { q: 12345 },                       // wrong type
+          { q: 'PSA', unit: longUnit },       // unit too long
+          { q: KNOWN_ACTIVE },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: SearchEnvelope[] };
+    expect(body.items).toHaveLength(5);
+    expect(body.items[0].results.length).toBeGreaterThan(0);
+    expect(body.items[1].results).toEqual([]);
+    expect(body.items[2].results).toEqual([]);
+    expect(body.items[3].results).toEqual([]);
+    expect(body.items[4].results[0].loinc_num).toBe(KNOWN_ACTIVE);
   });
 });
 

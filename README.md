@@ -175,7 +175,7 @@ Per-item validation failures behave differently between the two modes: single-in
 
 Free-text search ranked over `component`, `shortname`, `long_common_name`, `related_names`, with a synonym signal from `consumer_names` (see [Ranking model](#ranking-model)). When `q` matches `^\d{1,7}-\d$` the server transparently routes to lookup so paste-a-code returns the full record. `q` is zod-validated as 1–200 chars after trim; `unit`, if present, is 1–50 chars after trim.
 
-The response is always wrapped: `{ results, unitFilterApplied? }`. `unitFilterApplied` is **omitted** when no `unit` was sent or when `q` was a code (codes don't use the hint); `true` when the filter ran and kept rows; `false` when the filter emptied the candidate set and the route fell back to the unfiltered search.
+The response is always wrapped: `{ results, unitFilterApplied? }`. `unitFilterApplied` is **omitted** when no `unit` was sent or when `q` was a code (codes don't use the hint); `true` when the filter ran and kept rows, or when both the filtered and unfiltered queries returned nothing (the unit wasn't the cause of emptiness); `false` only when the filter emptied the candidate set *and* the unfiltered fallback found rows.
 
 ```
 GET /api/search?q=blood+urea+nitrogen
@@ -199,11 +199,13 @@ GET /api/search?q=PSA&unit=<51 chars>                    # unit too long
 → 400  { error: "Invalid unit" }
 ```
 
-The unit hint matches against both `ucum_units` and `example_units` (both columns can be `;`-separated multi-values; each piece is compared independently). Both sides are normalized before comparison: lowercased, Greek mu (`μ`, `µ`) → `u`, `mcg` → `ug`. So `ng/mL`, `NG/ML`, `mcg/L`, `μg/L`, and `µg/L` all match the strings LOINC publishes — but `ug/L` and `ng/mL` are **not** treated as equivalent (same dimension, different orders of magnitude); the hint is literal modulo aliasing, not unit-algebra.
+The unit hint matches against both `ucum_units` and `example_units`. `ucum_units` (from LOINC's `EXAMPLE_UCUM_UNITS`) is canonically `;`-delimited when it carries multiple values, so the `;`-split is reliable there. `example_units` is freer-form; the filter `;`-splits it on the same convention as a best effort, but a row that happens to pack multiple values with a different separator would be missed. Both sides are normalized before comparison: lowercased, Greek mu (`μ`, `µ`) → `u`, `mcg` → `ug`. So `ng/mL`, `NG/ML`, `mcg/L`, `μg/L`, and `µg/L` all match the strings LOINC publishes — but `ug/L` and `ng/mL` are **not** treated as equivalent (same dimension, different orders of magnitude); the hint is literal modulo aliasing, not unit-algebra.
 
 ### `POST /api/search`
 
-Batch search. Request body is JSON: `{ items: [{ q, unit? }, ...] }` (1–50 items). Each `q`/`unit` is validated the same way as the single-input form. Per-item processing is independent and runs with a bounded fan-out (8 concurrent DB calls). Results are returned in input order.
+> **Breaking change.** Replaces the previous repeated-`q` GET batch form. `GET /api/search` no longer reads more than one `q` — extra values are ignored.
+
+Batch search. Request body is JSON: `{ items: [{ q, unit? }, ...] }` (1–50 items). Per-item processing is independent and runs with a bounded fan-out (8 concurrent DB calls). Results are returned in input order. Validation is **per-item lenient** to match `/api/loinc` batch behavior: a malformed item (missing/oversized `q`, oversized `unit`, wrong types) collapses to `{ results: [] }` in its slot rather than failing the whole batch.
 
 ```
 POST /api/search
@@ -224,11 +226,11 @@ Content-Type: application/json
 
 ```
 POST /api/search   (malformed JSON body)              → 400 { error: "Invalid JSON body" }
-POST /api/search   (missing items, > 50 items, or any item failing q/unit validation)
+POST /api/search   (missing items, empty items, > 50 items, items not an array of objects)
                                                       → 400 { error: "Invalid body (...)" }
 ```
 
-Per-item failures (a DB error on one query) collapse to `{ results: [] }` for that slot — logged server-side, the rest of the batch still resolves. A batch where **every** item rejects returns `500` (almost always an outage; surfacing it loudly so callers can't mistake it for "no results").
+Per-item failures — either a validation rejection on the item or a DB error during its query — collapse to `{ results: [] }` for that slot. Runtime failures are logged server-side; validation rejections are silent. The rest of the batch still resolves. A batch where **every** item rejects at runtime returns `500` (almost always an outage; surfacing it loudly so callers can't mistake it for "no results").
 
 ### `GET /api/loinc?code=…`
 

@@ -6,19 +6,14 @@ import type { LookupResult, SearchResult } from '@/types/loinc';
 const LOINC_CODE_RE = /^\d{1,7}-\d$/;
 const QSchema = z.string().trim().min(1).max(200);
 const UnitSchema = z.string().trim().min(1).max(50);
-const BatchBodySchema = z.object({
-  items: z
-    .array(
-      z.object({
-        q: z.string().trim().min(1).max(200),
-        unit: z.string().trim().min(1).max(50).optional(),
-      })
-    )
-    .min(1)
-    .max(50),
-});
-
 const MAX_BATCH = 50;
+// Envelope-only schema: shape is structural (rejected with 400), per-item q/unit
+// validation happens inside runOneOrEmpty so a single malformed item degrades
+// to { results: [] } instead of failing the whole batch — matching the per-item
+// leniency that /api/loinc batch already provides.
+const BatchBodySchema = z.object({
+  items: z.array(z.record(z.string(), z.unknown())).min(1).max(MAX_BATCH),
+});
 // Bounded fan-out so one 50-item batch can't stampede Neon or starve concurrent requests.
 const MAX_CONCURRENT = 8;
 
@@ -68,10 +63,27 @@ async function runOne(q: string, unit?: string): Promise<SearchResponse> {
     return { results: filtered, unitFilterApplied: true };
   }
   // Fallback: a hint that excludes every candidate is almost certainly an
-  // over-constrained or mistyped unit; returning unfiltered results plus a
-  // flag lets the caller decide whether to surface a "unit ignored" notice.
+  // over-constrained or mistyped unit; return unfiltered + applied:false so
+  // the caller can show a "unit ignored" notice. Suppress the false flag if
+  // the unfiltered query is also empty — then the unit wasn't the cause and
+  // claiming a bypass would be misleading.
   const unfiltered = await searchLoinc(q);
+  if (unfiltered.length === 0) {
+    return { results: [], unitFilterApplied: true };
+  }
   return { results: unfiltered, unitFilterApplied: false };
+}
+
+// Per-item lenient: validation failures collapse to { results: [] } rather
+// than failing the whole batch, mirroring how DB rejections are handled and
+// how /api/loinc batch nulls invalid slots.
+async function runOneOrEmpty(item: Record<string, unknown>): Promise<SearchResponse> {
+  const q = QSchema.safeParse(item.q);
+  if (!q.success) return { results: [] };
+  if (item.unit == null) return runOne(q.data);
+  const unit = UnitSchema.safeParse(item.unit);
+  if (!unit.success) return { results: [] };
+  return runOne(q.data, unit.data);
 }
 
 export async function GET(req: Request) {
@@ -124,9 +136,7 @@ export async function POST(req: Request) {
 
   const { items } = parsed.data;
   try {
-    const settled = await mapWithLimit(items, MAX_CONCURRENT, (item) =>
-      runOne(item.q, item.unit)
-    );
+    const settled = await mapWithLimit(items, MAX_CONCURRENT, runOneOrEmpty);
     // Total-failure is almost always an outage, not a per-query problem; surface
     // it loudly so clients and dashboards can't mistake it for "no results".
     if (settled.every((s) => s.status === 'rejected')) {
