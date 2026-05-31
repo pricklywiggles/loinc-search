@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sql } from './db';
 import { lookupLoinc, lookupLoincMany, searchLoinc } from './search';
 
 const EGFR_CKD_EPI_2021 = '98979-8';
@@ -81,6 +82,42 @@ describe('searchLoinc', () => {
   it('returns [] when the unit hint matches no candidates', async () => {
     const results = await searchLoinc('PSA', 'parsec/mol');
     expect(results).toEqual([]);
+  });
+
+  // common_test_rank is the headline ranking lever; without this, a refactor of
+  // the boost (dropping the > 0 guard, flipping GREATEST/ln) would stay green
+  // while silently regressing every ranking. WHITE BLOOD CELLS is the clean
+  // case: 6690-2 (the automated WBC count, common_test_rank 21) only out-ranks
+  // the "Leukocytes other" variant 30406-3 (rank 14223) because of the boost.
+  it('ranks the common WBC count 6690-2 above the rare "Leukocytes other" variant', async () => {
+    const results = await searchLoinc('WHITE BLOOD CELLS', '10*3/uL');
+    const canonical = results.findIndex((r) => r.loinc_num === '6690-2');
+    const variant = results.findIndex((r) => r.loinc_num === '30406-3');
+    expect(canonical).toBeGreaterThanOrEqual(0);
+    if (variant !== -1) expect(canonical).toBeLessThan(variant);
+  });
+});
+
+// Binds the boost expression used by searchLoinc's ORDER BY to its real source
+// of truth (the Postgres function), the same way the parity test binds
+// loinc_normalize_unit. A change to the function's shape fails here.
+describe('loinc_common_test_boost()', () => {
+  it('maps common_test_rank to a bounded, monotonic multiplier', async () => {
+    const rows = (await sql`
+      SELECT loinc_common_test_boost(r) AS boost
+      FROM unnest(ARRAY[NULL, 0, 1, 21, 20000, 40000]::int[]) WITH ORDINALITY AS t(r, pos)
+      ORDER BY pos
+    `) as unknown as Array<{ boost: number }>;
+    const b = rows.map((x) => Number(x.boost));
+    // unranked (NULL / 0) → neutral 1.0; rank 1 → max 1.6; >= max rank → clamped 1.0
+    expect(b[0]).toBeCloseTo(1.0, 6);
+    expect(b[1]).toBeCloseTo(1.0, 6);
+    expect(b[2]).toBeCloseTo(1.6, 6);
+    expect(b[4]).toBeCloseTo(1.0, 6);
+    expect(b[5]).toBeCloseTo(1.0, 6); // clamped — never a penalty below 1.0
+    // monotonic non-increasing in rank (more common ⇒ larger boost)
+    expect(b[2]).toBeGreaterThan(b[3]);
+    expect(b[3]).toBeGreaterThan(b[4]);
   });
 });
 

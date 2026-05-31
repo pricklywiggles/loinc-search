@@ -101,14 +101,18 @@ async function main() {
         class, status, shortname, long_common_name, related_names,
         example_units, ucum_units, definition,
         version_first_released, version_last_changed,
-        external_copyright_notice
+        external_copyright_notice,
+        common_test_rank, common_order_rank, classtype
       )
       SELECT
         loinc_num, component, property, time_aspct, system, scale_typ, method_typ,
         class, status, shortname, long_common_name, relatednames2,
         example_units, example_ucum_units, definition_description,
         version_first_released, version_last_changed,
-        NULLIF(external_copyright_notice, '')
+        NULLIF(external_copyright_notice, ''),
+        NULLIF(common_test_rank, '')::int,
+        NULLIF(common_order_rank, '')::int,
+        NULLIF(classtype, '')::int
       FROM loinc_raw
     `);
     await client.query('DROP TABLE loinc_raw');
