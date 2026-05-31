@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sql } from './db';
 import { normalizeUnit } from './normalize-unit';
 
 describe('normalizeUnit', () => {
@@ -33,5 +34,42 @@ describe('normalizeUnit', () => {
     expect(normalizeUnit('%')).toBe('%');
     expect(normalizeUnit('[iU]/L')).toBe('[iu]/l');
     expect(normalizeUnit('U/L')).toBe('u/l');
+  });
+});
+
+// The query side (this normalizer) and the storage side (the replace/btrim
+// chain inside searchLoinc's SQL) must produce identical strings for the
+// filter to match. This test pins that parity against a fixture covering the
+// realistic shapes; a future rule added to one side will fail here.
+describe('normalizeUnit ↔ SQL parity', () => {
+  const fixtures = [
+    'ng/mL',
+    'NG/ML',
+    '  ng/mL  ',
+    'mcg/dL',
+    'MCG/mL',
+    'μg/L',
+    'µg/L',
+    'μmol/L',
+    'mm Hg',
+    'mg/24 H',
+    'arb U/mL',
+    '[iU]/L',
+    '%',
+    'ug/g{Hb}',
+    'mcg/g creat',
+  ];
+
+  it('matches Postgres-side normalization element-wise', async () => {
+    const ts = fixtures.map((f) => normalizeUnit(f));
+    const rows = (await sql`
+      SELECT replace(replace(replace(
+               lower(btrim(u)),
+             'μ', 'u'), 'µ', 'u'), 'mcg', 'ug') AS normalized
+      FROM unnest(${fixtures}::text[]) WITH ORDINALITY AS t(u, pos)
+      ORDER BY pos
+    `) as unknown as Array<{ normalized: string }>;
+
+    expect(rows.map((r) => r.normalized)).toEqual(ts);
   });
 });
