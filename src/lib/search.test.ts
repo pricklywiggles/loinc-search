@@ -83,6 +83,25 @@ describe('searchLoinc', () => {
     expect(hasUgDl).toBe(true);
   });
 
+  // Proves the gate gates: a mcg/dL (mass_conc) hint must never admit a code
+  // whose property classifies to a *different* known dimension (e.g. a
+  // cortisol/creatinine ratio → fraction). NULL/unclassifiable is allowed —
+  // the gate only excludes confident cross-dimension mismatches.
+  it('excludes wrong-dimension codes for a mcg/dL hint', async () => {
+    const results = await searchLoinc('cortisol', 'mcg/dL');
+    expect(results.length).toBeGreaterThan(0);
+    const props = [...new Set(results.map((r) => r.property))];
+    const classRows = (await sql`
+      SELECT p, loinc_property_class(p) AS cls
+      FROM unnest(${props}::text[]) AS p
+    `) as unknown as Array<{ p: string; cls: string | null }>;
+    const classByProp = new Map(classRows.map((r) => [r.p, r.cls]));
+    for (const r of results) {
+      const cls = classByProp.get(r.property) ?? null;
+      expect(cls === null || cls === 'mass_conc').toBe(true);
+    }
+  });
+
   it('returns [] when the unit hint matches no candidates', async () => {
     const results = await searchLoinc('PSA', 'parsec/mol');
     expect(results).toEqual([]);
@@ -109,8 +128,11 @@ describe('searchLoinc', () => {
     const results = await searchLoinc('NUCLEATED RBC (AUTOMATED)', '/100 WBC');
     const general = results.findIndex((r) => r.loinc_num === '58413-6');
     const fetal = results.findIndex((r) => r.loinc_num === '62245-6');
+    // both ratios must be admitted by the gate, and the general one ranks above
+    // the fetal — asserting fetal's presence keeps the win from silently passing
     expect(general).toBeGreaterThanOrEqual(0);
-    if (fetal !== -1) expect(general).toBeLessThan(fetal);
+    expect(fetal).toBeGreaterThanOrEqual(0);
+    expect(general).toBeLessThan(fetal);
   });
 });
 
@@ -142,16 +164,30 @@ describe('loinc_common_test_boost()', () => {
 // dimension-equivalent code; both sides must agree, and unknowns must be NULL.
 describe('loinc_unit_class() / loinc_property_class()', () => {
   it('maps units and properties to matching dimension classes (NULL when unknown)', async () => {
+    // Each row pairs a unit and a property that must resolve to the same class,
+    // exercising every branch of both functions (incl. the arb-vs-cat ordering,
+    // the pg vs pg/mL bare-token boundary, and the fraction property aliases).
     const rows = (await sql`
       SELECT loinc_unit_class(u) AS uc, loinc_property_class(p) AS pc
       FROM unnest(
-        ARRAY['/100 wbc','cells/ul','pg','fl','uiu/ml','mmol/l','mg/dl','10*3/ul','%','zorp'],
-        ARRAY['Ratio','NCnc','EntMass','EntVol','ACnc','SCnc','MCnc','NCnc','NFr','Bogus']
+        ARRAY['%','/100 wbc','5/[hpf]','ratio','/100{wbcs}','%','%','%',
+              'cells/ul','10*3/ul','/mm3','/ml',
+              'mmol/l','mg/dl','pg/ml',
+              'pg','fg','fl','fl',
+              'iu/ml','uiu/ml','u/l','ku/l','mu/l','zorp'],
+        ARRAY['NFr','Ratio','MFr','SRto','SFr','VFr','MRto','NRto',
+              'NCnc','NCnc','NCnc','NCnc',
+              'SCnc','MCnc','MCnc',
+              'EntMass','EntMeanMass','EntVol','EntMeanVol',
+              'ACnc','ACnc','CCnc','CCnc','CCnc','Bogus']
       ) AS t(u, p)
     `) as unknown as Array<{ uc: string | null; pc: string | null }>;
     const expected = [
-      'fraction', 'count_conc', 'ent_mass', 'ent_vol', 'arb_conc',
-      'subst_conc', 'mass_conc', 'count_conc', 'fraction', null,
+      'fraction', 'fraction', 'fraction', 'fraction', 'fraction', 'fraction', 'fraction', 'fraction',
+      'count_conc', 'count_conc', 'count_conc', 'count_conc',
+      'subst_conc', 'mass_conc', 'mass_conc',
+      'ent_mass', 'ent_mass', 'ent_vol', 'ent_vol',
+      'arb_conc', 'arb_conc', 'cat_conc', 'cat_conc', 'cat_conc', null,
     ];
     expect(rows.map((r) => r.uc)).toEqual(expected);
     expect(rows.map((r) => r.pc)).toEqual(expected);
