@@ -37,11 +37,12 @@ describe('normalizeUnit', () => {
   });
 });
 
-// The query side (this normalizer) and the storage side (the replace/btrim
-// chain inside searchLoinc's SQL) must produce identical strings for the
-// filter to match. This test pins that parity against a fixture covering the
-// realistic shapes; a future rule added to one side will fail here.
-describe('normalizeUnit ↔ SQL parity', () => {
+// Binds the TS normalizer (client input) and the Postgres function
+// loinc_normalize_unit (called by searchLoinc on stored ucum_units /
+// example_units). Both must produce identical strings for the filter to
+// match; calling the real DB function — not a hand-copied SQL chain — means
+// a future schema.sql change to the function fails here, too.
+describe('normalizeUnit ↔ loinc_normalize_unit() parity', () => {
   const fixtures = [
     'ng/mL',
     'NG/ML',
@@ -60,12 +61,10 @@ describe('normalizeUnit ↔ SQL parity', () => {
     'mcg/g creat',
   ];
 
-  it('matches Postgres-side normalization element-wise', async () => {
+  it('produces identical output element-wise', async () => {
     const ts = fixtures.map((f) => normalizeUnit(f));
     const rows = (await sql`
-      SELECT replace(replace(replace(
-               lower(btrim(u)),
-             'μ', 'u'), 'µ', 'u'), 'mcg', 'ug') AS normalized
+      SELECT loinc_normalize_unit(u) AS normalized
       FROM unnest(${fixtures}::text[]) WITH ORDINALITY AS t(u, pos)
       ORDER BY pos
     `) as unknown as Array<{ normalized: string }>;

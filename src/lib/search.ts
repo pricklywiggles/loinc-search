@@ -59,12 +59,10 @@ export async function searchLoinc(
         OR EXISTS (
           SELECT 1
           FROM unnest(string_to_array(
-            replace(replace(replace(
-              lower(coalesce(l.ucum_units, '') || ';' || coalesce(l.example_units, '')),
-              'μ', 'u'), 'µ', 'u'), 'mcg', 'ug'),
+            coalesce(l.ucum_units, '') || ';' || coalesce(l.example_units, ''),
             ';'
           )) AS u
-          WHERE btrim(u) = q.unit_norm
+          WHERE loinc_normalize_unit(u) = q.unit_norm
         )
       )
     ORDER BY score DESC
