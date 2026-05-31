@@ -8,12 +8,19 @@ import { SearchInput, LOINC_CODE_RE } from '@/components/SearchInput';
 import { SingleResultView } from '@/components/SingleResultView';
 import type { LookupResult, SearchResult } from '@/types/loinc';
 
+type UnitFilter = { unit: string; applied: boolean };
+
 type State =
   | { kind: 'idle' }
   | { kind: 'loading'; query: string }
-  | { kind: 'list'; query: string; results: SearchResult[] }
+  | {
+      kind: 'list';
+      query: string;
+      results: SearchResult[];
+      unitFilter?: UnitFilter;
+    }
   | { kind: 'single'; query: string; result: LookupResult }
-  | { kind: 'empty'; query: string }
+  | { kind: 'empty'; query: string; unitFilter?: UnitFilter }
   | { kind: 'error'; query: string; message: string };
 
 const DEBOUNCE_MS = 250;
@@ -36,10 +43,14 @@ export default function Home() {
   useEffect(() => {
     const trimmed = query.trim();
     const id = setTimeout(() => {
-      const url = new URL(window.location.href);
-      if (trimmed) url.searchParams.set('q', trimmed);
-      else url.searchParams.delete('q');
-      window.history.replaceState(null, '', url);
+      // `unit` is read straight from the URL — no UI affords editing it, but
+      // a manually-appended ?unit=ng/mL still threads through to the API and
+      // shows up in the filter chip below results.
+      const currentUrl = new URL(window.location.href);
+      const unit = currentUrl.searchParams.get('unit')?.trim() ?? '';
+      if (trimmed) currentUrl.searchParams.set('q', trimmed);
+      else currentUrl.searchParams.delete('q');
+      window.history.replaceState(null, '', currentUrl);
 
       if (!trimmed) {
         setState({ kind: 'idle' });
@@ -49,9 +60,13 @@ export default function Home() {
       setState({ kind: 'loading', query: trimmed });
 
       const isCode = LOINC_CODE_RE.test(trimmed);
+      const params = new URLSearchParams({ q: trimmed });
+      // Codes resolve via /api/loinc which has no unit-aware variant; sending
+      // the hint there would be silently dropped, so we just skip it.
+      if (unit && !isCode) params.set('unit', unit);
       const endpoint = isCode
         ? `/api/loinc?code=${encodeURIComponent(trimmed)}`
-        : `/api/search?q=${encodeURIComponent(trimmed)}`;
+        : `/api/search?${params.toString()}`;
 
       fetch(endpoint)
         .then(async (res) => {
@@ -66,12 +81,24 @@ export default function Home() {
             if (myId !== reqId.current) return;
             setState({ kind: 'single', query: trimmed, result: data });
           } else {
-            const data = (await res.json()) as { results: SearchResult[] };
+            const data = (await res.json()) as {
+              results: SearchResult[];
+              unitFilterApplied?: boolean;
+            };
             if (myId !== reqId.current) return;
+            const unitFilter: UnitFilter | undefined =
+              unit && data.unitFilterApplied !== undefined
+                ? { unit, applied: data.unitFilterApplied }
+                : undefined;
             setState(
               data.results.length === 0
-                ? { kind: 'empty', query: trimmed }
-                : { kind: 'list', query: trimmed, results: data.results }
+                ? { kind: 'empty', query: trimmed, unitFilter }
+                : {
+                    kind: 'list',
+                    query: trimmed,
+                    results: data.results,
+                    unitFilter,
+                  }
             );
           }
         })
@@ -138,6 +165,20 @@ export default function Home() {
             </span>
           </p>
         )}
+        {(state.kind === 'list' || state.kind === 'empty') &&
+          state.unitFilter && (
+            <p className="mb-4 flex flex-wrap items-center gap-2 text-[11px] font-medium uppercase tracking-[0.22em] text-[color:var(--paper-muted)]">
+              <span>Unit filter</span>
+              <span className="rounded-full border border-[color:var(--rule-strong)] px-2 py-0.5 normal-case tracking-normal text-[color:var(--paper-bright)]">
+                {state.unitFilter.unit}
+              </span>
+              {!state.unitFilter.applied && (
+                <span className="normal-case tracking-normal text-[color:var(--paper-muted)]">
+                  — no matches, showing unfiltered
+                </span>
+              )}
+            </p>
+          )}
         {state.kind === 'empty' && <EmptyState query={state.query} />}
         {state.kind === 'error' && <ErrorState message={state.message} />}
         {state.kind === 'list' && (
