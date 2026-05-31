@@ -66,12 +66,12 @@ export default function Home() {
             if (myId !== reqId.current) return;
             setState({ kind: 'single', query: trimmed, result: data });
           } else {
-            const data = (await res.json()) as SearchResult[];
+            const data = (await res.json()) as { results: SearchResult[] };
             if (myId !== reqId.current) return;
             setState(
-              data.length === 0
+              data.results.length === 0
                 ? { kind: 'empty', query: trimmed }
-                : { kind: 'list', query: trimmed, results: data }
+                : { kind: 'list', query: trimmed, results: data.results }
             );
           }
         })

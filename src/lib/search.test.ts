@@ -51,6 +51,37 @@ describe('searchLoinc', () => {
       expect(trial.score).toBeLessThan(active.score * 2);
     }
   });
+
+  // 2857-1 (total PSA) ranks ~35/52 without a unit hint because LOINC's
+  // consumer_name for it ("Prostate specific antigen, Blood") doesn't share
+  // trigrams with the acronym, so free-PSA variants float to the top and bury
+  // it past LIMIT 20. The unit filter shrinks the candidate set enough that
+  // it surfaces.
+  it('surfaces 2857-1 (total PSA) when a ng/mL unit hint is passed', async () => {
+    const unfiltered = await searchLoinc('PSA');
+    expect(unfiltered.find((r) => r.loinc_num === '2857-1')).toBeUndefined();
+
+    const filtered = await searchLoinc('PSA', 'ng/mL');
+    expect(filtered.find((r) => r.loinc_num === '2857-1')).toBeDefined();
+  });
+
+  it('treats the unit hint case-insensitively and maps μ / mcg to ug', async () => {
+    const lower = await searchLoinc('PSA', 'NG/ML');
+    expect(lower.find((r) => r.loinc_num === '2857-1')).toBeDefined();
+
+    // mcg/dL → ug/dL canonical; cortisol rows publish ug/dL in ucum_units
+    const cortisol = await searchLoinc('cortisol', 'mcg/dL');
+    expect(cortisol.length).toBeGreaterThan(0);
+    for (const r of cortisol) {
+      const blob = `${r.ucum_units ?? ''};${r.example_units ?? ''}`.toLowerCase();
+      expect(blob.includes('ug/dl') || blob.includes('mcg/dl')).toBe(true);
+    }
+  });
+
+  it('returns [] when the unit hint matches no candidates', async () => {
+    const results = await searchLoinc('PSA', 'parsec/mol');
+    expect(results).toEqual([]);
+  });
 });
 
 describe('lookupLoinc', () => {
