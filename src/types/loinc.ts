@@ -6,6 +6,7 @@ export interface SearchResult {
   shortname: string | null;
   long_common_name: string | null;
   related_names: string | null;
+  property: string;
   system: string;
   scale_typ: string;
   example_units: string | null;

@@ -24,6 +24,7 @@ export async function searchLoinc(q: string): Promise<SearchResult[]> {
       l.shortname,
       l.long_common_name,
       l.related_names,
+      l.property,
       l.system,
       l.scale_typ,
       l.example_units,
