@@ -69,6 +69,12 @@ export async function searchLoinc(
           )) AS u
           WHERE loinc_normalize_unit(u) = q.unit_norm
         )
+        -- Dimension-equivalent fallback: keep a candidate when its property is
+        -- the same dimension class as the hinted unit even if the exact unit
+        -- string differs (e.g. "/100 WBC" vs a code stored as "%"). Broadens
+        -- only — never drops an exact match — and only fires when both the unit
+        -- and the property classify (NULL = unknown ⇒ no effect).
+        OR loinc_unit_class(q.unit_norm) = loinc_property_class(l.property)
       )
     ORDER BY score DESC
     LIMIT 20

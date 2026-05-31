@@ -70,13 +70,17 @@ describe('searchLoinc', () => {
     const lower = await searchLoinc('PSA', 'NG/ML');
     expect(lower.find((r) => r.loinc_num === '2857-1')).toBeDefined();
 
-    // mcg/dL → ug/dL canonical; cortisol rows publish ug/dL in ucum_units
+    // mcg/dL → ug/dL: the fold must surface the exact-match ug/dL cortisol code.
+    // The dimension gate also admits other mass-concentration cortisol codes
+    // (e.g. ug/L, ng/mL), so assert at least one exact ug/dL match rather than
+    // requiring every returned row to carry the literal unit.
     const cortisol = await searchLoinc('cortisol', 'mcg/dL');
     expect(cortisol.length).toBeGreaterThan(0);
-    for (const r of cortisol) {
+    const hasUgDl = cortisol.some((r) => {
       const blob = `${r.ucum_units ?? ''};${r.example_units ?? ''}`.toLowerCase();
-      expect(blob.includes('ug/dl') || blob.includes('mcg/dl')).toBe(true);
-    }
+      return blob.includes('ug/dl') || blob.includes('mcg/dl');
+    });
+    expect(hasUgDl).toBe(true);
   });
 
   it('returns [] when the unit hint matches no candidates', async () => {
@@ -95,6 +99,18 @@ describe('searchLoinc', () => {
     const variant = results.findIndex((r) => r.loinc_num === '30406-3');
     expect(canonical).toBeGreaterThanOrEqual(0);
     if (variant !== -1) expect(canonical).toBeLessThan(variant);
+  });
+
+  // Dimension gate: a "/100 WBC" hint must keep both nucleated-RBC ratios
+  // (stored "%" and "/100{WBCs}"), and common_test_rank then ranks the general
+  // 58413-6 above the rare fetal 62245-6. Pre-gate, exact-string matching kept
+  // only the fetal code and dropped the canonical entirely.
+  it('keeps the general nRBC ratio 58413-6 above the fetal 62245-6 for /100 WBC', async () => {
+    const results = await searchLoinc('NUCLEATED RBC (AUTOMATED)', '/100 WBC');
+    const general = results.findIndex((r) => r.loinc_num === '58413-6');
+    const fetal = results.findIndex((r) => r.loinc_num === '62245-6');
+    expect(general).toBeGreaterThanOrEqual(0);
+    if (fetal !== -1) expect(general).toBeLessThan(fetal);
   });
 });
 
@@ -118,6 +134,27 @@ describe('loinc_common_test_boost()', () => {
     // monotonic non-increasing in rank (more common ⇒ larger boost)
     expect(b[2]).toBeGreaterThan(b[3]);
     expect(b[3]).toBeGreaterThan(b[4]);
+  });
+});
+
+// Binds the dimension-gate classifiers to their SQL definitions. A unit and a
+// property in the same dimension class is what lets searchLoinc keep a
+// dimension-equivalent code; both sides must agree, and unknowns must be NULL.
+describe('loinc_unit_class() / loinc_property_class()', () => {
+  it('maps units and properties to matching dimension classes (NULL when unknown)', async () => {
+    const rows = (await sql`
+      SELECT loinc_unit_class(u) AS uc, loinc_property_class(p) AS pc
+      FROM unnest(
+        ARRAY['/100 wbc','cells/ul','pg','fl','uiu/ml','mmol/l','mg/dl','10*3/ul','%','zorp'],
+        ARRAY['Ratio','NCnc','EntMass','EntVol','ACnc','SCnc','MCnc','NCnc','NFr','Bogus']
+      ) AS t(u, p)
+    `) as unknown as Array<{ uc: string | null; pc: string | null }>;
+    const expected = [
+      'fraction', 'count_conc', 'ent_mass', 'ent_vol', 'arb_conc',
+      'subst_conc', 'mass_conc', 'count_conc', 'fraction', null,
+    ];
+    expect(rows.map((r) => r.uc)).toEqual(expected);
+    expect(rows.map((r) => r.pc)).toEqual(expected);
   });
 });
 
