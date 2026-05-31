@@ -22,6 +22,70 @@ LANGUAGE sql IMMUTABLE AS $$
     ELSE 0.0 END
 $$;
 
+-- Coarse dimension class for a LOINC property. Paired with loinc_unit_class()
+-- so the unit-hint filter can keep dimension-equivalent codes (e.g. a "/100 WBC"
+-- ratio stored as "%") and skip wrong-dimension ones. Returns NULL for anything
+-- we don't confidently classify; the filter treats NULL as "unknown" and never
+-- drops on it.
+CREATE OR REPLACE FUNCTION loinc_property_class(property text) RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE property
+    WHEN 'NCnc' THEN 'count_conc'
+    WHEN 'MCnc' THEN 'mass_conc'
+    WHEN 'SCnc' THEN 'subst_conc'
+    WHEN 'CCnc' THEN 'cat_conc'
+    WHEN 'ACnc' THEN 'arb_conc'
+    WHEN 'MFr'  THEN 'fraction'
+    WHEN 'NFr'  THEN 'fraction'
+    WHEN 'SFr'  THEN 'fraction'
+    WHEN 'VFr'  THEN 'fraction'
+    WHEN 'Ratio' THEN 'fraction'
+    WHEN 'SRto' THEN 'fraction'
+    WHEN 'MRto' THEN 'fraction'
+    WHEN 'NRto' THEN 'fraction'
+    WHEN 'EntVol' THEN 'ent_vol'
+    WHEN 'EntMeanVol' THEN 'ent_vol'
+    WHEN 'EntMass' THEN 'ent_mass'
+    WHEN 'EntMeanMass' THEN 'ent_mass'
+    ELSE NULL
+  END
+$$;
+
+-- Coarse dimension class for a normalized unit string (input is already through
+-- loinc_normalize_unit, so lowercase with mcg→ug, ^→*, mEq→mmol). Deliberately
+-- partial — only the confident cases; NULL otherwise. LIKE treats * and [ ] as
+-- literals (only % and _ are wildcards), so "10*%" and "[iu]" match verbatim.
+CREATE OR REPLACE FUNCTION loinc_unit_class(u text) RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE
+    WHEN u IS NULL THEN NULL
+    -- dimensionless fraction / ratio: %, x/100{cells}, per HPF/LPF, "ratio"
+    WHEN u LIKE '%\%%' ESCAPE '\'
+      OR u LIKE '/100%'
+      OR u LIKE '%{wbcs}%'
+      OR u LIKE '%/[hpf]%' OR u LIKE '%/[lpf]%'
+      OR u = 'ratio'
+      THEN 'fraction'
+    -- entitic (per-cell) volume / mass — MCV (fL), MCH (pg); bare token only,
+    -- "pg/mL" falls through to mass_conc.
+    WHEN u = 'fl' THEN 'ent_vol'
+    WHEN u IN ('pg', 'fg') THEN 'ent_mass'
+    -- count concentration: powers of ten or cells per volume
+    WHEN u LIKE '10*%' OR u LIKE 'cells/%' OR u IN ('/ul', '/ml', '/l', '/mm3')
+      THEN 'count_conc'
+    -- substance (molar) concentration
+    WHEN u LIKE '%mol/%' THEN 'subst_conc'
+    -- arbitrary concentration: international units, titers
+    WHEN u LIKE '%[iu]%' OR u LIKE '%iu/%' OR u LIKE '%[arb%' THEN 'arb_conc'
+    -- catalytic concentration: enzyme activity U/x
+    WHEN u LIKE 'u/%' OR u LIKE 'ku/%' OR u LIKE 'mu/%' THEN 'cat_conc'
+    -- mass concentration: mass prefix per volume
+    WHEN u LIKE 'g/%' OR u LIKE 'mg/%' OR u LIKE 'ug/%'
+      OR u LIKE 'ng/%' OR u LIKE 'pg/%' OR u LIKE 'fg/%' THEN 'mass_conc'
+    ELSE NULL
+  END
+$$;
+
 DROP TABLE IF EXISTS consumer_names;
 DROP TABLE IF EXISTS map_to;
 DROP TABLE IF EXISTS loinc;
