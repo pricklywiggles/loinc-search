@@ -120,18 +120,25 @@ CREATE TABLE loinc (
   common_test_rank       INTEGER,
   common_order_rank      INTEGER,
   classtype              INTEGER,
+  -- Patient-facing consumer names, denormalized from consumer_names so the lay
+  -- vocabulary ("Mean Corpuscular Hemoglobin", "Cobalamin (Vitamin B12)") counts
+  -- toward search RECALL, not just ranking. The importer populates this after
+  -- consumer_names loads; the generated columns below then pick it up.
+  consumer_names_text    TEXT,
   search_text            TEXT GENERATED ALWAYS AS (
     COALESCE(component, '') || ' ' ||
     COALESCE(shortname, '') || ' ' ||
     COALESCE(long_common_name, '') || ' ' ||
-    COALESCE(related_names, '')
+    COALESCE(related_names, '') || ' ' ||
+    COALESCE(consumer_names_text, '')
   ) STORED,
   search_vector          tsvector GENERATED ALWAYS AS (
     to_tsvector('english',
       COALESCE(component, '') || ' ' ||
       COALESCE(shortname, '') || ' ' ||
       COALESCE(long_common_name, '') || ' ' ||
-      COALESCE(related_names, ''))
+      COALESCE(related_names, '') || ' ' ||
+      COALESCE(consumer_names_text, ''))
   ) STORED
 );
 
