@@ -17,12 +17,18 @@ function arg(flag, fallback) {
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 
-const BASE = arg('--base', 'https://loinc.fractal.ly').replace(/\/$/, '');
+// Defaults to localhost so a bare run doesn't silently fire 57 queries at prod;
+// pass --base https://loinc.fractal.ly explicitly to hit a deployment.
+const BASE = arg('--base', 'http://localhost:3000').replace(/\/$/, '');
 const FIXTURE = arg('--fixture', 'fixtures/loinc-search-acceptance.json');
-const WINDOW = 20;
+const WINDOW = 20; // mirrors the LIMIT 20 in searchLoinc (src/lib/search.ts)
 
 const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'));
 const rows = fixture.rows;
+
+if (!/^https?:\/\/(localhost|127\.0\.0\.1)/.test(BASE)) {
+  console.warn(`\n⚠  Querying a NON-LOCAL target with ${rows.length} requests: ${BASE}\n`);
+}
 
 // name_unit_conflict and empty-unit rows are scored name-recall only: the unit
 // is intentionally withheld so a correct dimension gate isn't penalized.
@@ -52,7 +58,11 @@ function chunk(arr, n) {
 
 const responses = [];
 for (const c of chunk(rows.map(buildItem), 50)) {
-  responses.push(...(await runBatch(c)));
+  const out = await runBatch(c);
+  if (out.length !== c.length) {
+    throw new Error(`batch length mismatch: sent ${c.length}, received ${out.length}`);
+  }
+  responses.push(...out);
 }
 
 const evaluated = rows.map((row, i) => {
@@ -85,11 +95,20 @@ function pct(n, d) {
 }
 
 const present = evaluated.filter((e) => e.present);
+// Zero results for a real analyte usually means a server-side per-item error
+// (route.ts returns {results: []} for a failed batch item), not a true no-match
+// — surface it instead of silently folding it into the recall miss count.
+const empty = evaluated.filter((e) => e.returned === 0).length;
 const ranks = present.map((e) => e.bestRank).sort((a, b) => a - b);
 const mean = ranks.length
   ? (ranks.reduce((a, b) => a + b, 0) / ranks.length).toFixed(2)
   : 'n/a';
-const median = ranks.length ? ranks[Math.floor(ranks.length / 2)] : 'n/a';
+const mid = Math.floor(ranks.length / 2);
+const median = !ranks.length
+  ? 'n/a'
+  : ranks.length % 2
+    ? ranks[mid]
+    : (ranks[mid - 1] + ranks[mid]) / 2;
 
 console.log(`\nLOINC search acceptance — ${BASE}  (${rows.length} rows)\n`);
 console.log('Rows needing attention (absent, rank>1, or reject violation):');
@@ -111,6 +130,7 @@ console.log('\nSummary');
 console.log(`  recall@${WINDOW} (expected/alt present): ${present.length}/${rows.length}  (${pct(present.length, rows.length)})`);
 console.log(`  top-1:                               ${evaluated.filter((e) => e.top1).length}/${rows.length}  (${pct(evaluated.filter((e) => e.top1).length, rows.length)})`);
 console.log(`  absent from window:                  ${rows.length - present.length}`);
+console.log(`  empty result sets (possible errors): ${empty}`);
 console.log(`  reject violations:                   ${evaluated.filter((e) => e.rejectViolation).length}`);
 console.log(`  rank-of-canonical (present rows):    mean ${mean}, median ${median}`);
 

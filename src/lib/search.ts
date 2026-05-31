@@ -52,14 +52,10 @@ export async function searchLoinc(
           ), 0)
       )
       * CASE WHEN l.status = 'TRIAL' THEN 0.5 ELSE 1.0 END
-      -- Bounded multiplicative boost toward LOINC's common-test rank (lower rank =
-      -- more commonly reported; 0/NULL = unranked) so the analyte's primary
-      -- reportable code outranks lexical near-variants. Weight is provisional —
-      -- tune against a curated set, never the acceptance fixture.
-      * (1.0 + 0.6 * CASE
-          WHEN l.common_test_rank > 0
-          THEN GREATEST(0.0, 1.0 - ln(l.common_test_rank) / ln(20000.0))
-          ELSE 0.0 END) AS score
+      -- Bounded boost toward the analyte's primary reportable code; the formula
+      -- lives in loinc_common_test_boost() (schema.sql) so it's a single,
+      -- testable source of truth.
+      * loinc_common_test_boost(l.common_test_rank) AS score
     FROM loinc l, q
     WHERE l.status IN ('ACTIVE', 'TRIAL')
       AND (l.search_vector @@ q.tsq OR l.search_text % q.raw)

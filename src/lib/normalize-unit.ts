@@ -8,7 +8,9 @@
 // stores mmol/L; for those ions the two are numerically identical, so fold
 // mEq/L→mmol/L (a 2x imprecision for divalent Ca/Mg is acceptable here — the
 // unit only disambiguates the analyte's dimension, not its exact magnitude).
-// The same folds run on the stored side in search.ts so both compare equal.
+// The same folds run on the stored side via loinc_normalize_unit() (schema.sql),
+// which searchLoinc calls — so both sides compare equal. A TS↔SQL parity test
+// guards the two from drifting.
 // Internal whitespace is preserved — "mm Hg" and "mg/24 H" are real units.
 export function normalizeUnit(raw: string | null | undefined): string | null {
   if (raw == null) return null;

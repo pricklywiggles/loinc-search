@@ -10,6 +10,18 @@ LANGUAGE sql IMMUTABLE STRICT AS $$
     lower(btrim(s)), 'μ', 'u'), 'µ', 'u'), 'mcg', 'ug'), '^', '*'), 'meq', 'mmol')
 $$;
 
+-- Bounded multiplicative ranking boost from LOINC's common-test rank (lower =
+-- more commonly reported; 0/NULL → neutral 1.0). 20000 ≈ the corpus max
+-- common_test_rank, i.e. the clamp boundary; 0.6 is a provisional weight, to be
+-- tuned against a curated set rather than the acceptance fixture. NOT STRICT so
+-- a NULL rank yields 1.0, not NULL (which would null out the whole score).
+CREATE OR REPLACE FUNCTION loinc_common_test_boost(rank integer) RETURNS double precision
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT 1.0 + 0.6 * CASE
+    WHEN rank > 0 THEN greatest(0.0, 1.0 - ln(rank) / ln(20000.0))
+    ELSE 0.0 END
+$$;
+
 DROP TABLE IF EXISTS consumer_names;
 DROP TABLE IF EXISTS map_to;
 DROP TABLE IF EXISTS loinc;
@@ -38,8 +50,9 @@ CREATE TABLE loinc (
   external_copyright_notice TEXT,
   -- Regenstrief's curated frequency ranks (lower = more commonly used; NULL/0 =
   -- unranked). common_test_rank is the closest LOINC ships to a "primary
-  -- reportable code per analyte" signal, used by ranking as a bounded tiebreak.
-  -- classtype: 1=Laboratory, 2=Clinical, 3=Claims, 4=Survey.
+  -- reportable code per analyte" signal, fed to loinc_common_test_boost().
+  -- common_order_rank and classtype (1=Laboratory, 2=Clinical, 3=Claims,
+  -- 4=Survey) are persisted for future levers; nothing in src/ reads them yet.
   common_test_rank       INTEGER,
   common_order_rank      INTEGER,
   classtype              INTEGER,

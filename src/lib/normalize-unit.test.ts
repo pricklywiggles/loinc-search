@@ -51,6 +51,21 @@ describe('normalizeUnit', () => {
     // mmol/L already canonical
     expect(normalizeUnit('mmol/L')).toBe('mmol/l');
   });
+
+  // The mEq→mmol fold is valence-blind by design: exact for monovalent ions
+  // (Na/K/Cl/HCO3), deliberately 2x-off for divalent Ca/Mg. Locked here so a
+  // future "fix" is a conscious, test-breaking choice. It's a substring replace,
+  // so also assert it leaves unrelated units alone.
+  it('applies the mEq fold unconditionally and leaves non-mEq units untouched', () => {
+    expect(normalizeUnit('mEq/L')).toBe('mmol/l');
+    expect(normalizeUnit('mg/dL')).toBe('mg/dl');
+    expect(normalizeUnit('U/mL')).toBe('u/ml');
+  });
+
+  it('applies caret and micro folds together', () => {
+    expect(normalizeUnit('10^3/µL')).toBe('10*3/ul');
+    expect(normalizeUnit('10^6/μL')).toBe('10*6/ul');
+  });
 });
 
 // Binds the TS normalizer (client input) and the Postgres function
