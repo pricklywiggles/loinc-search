@@ -1,4 +1,5 @@
 import { sql } from './db';
+import { normalizeUnit } from './normalize-unit';
 import type { LookupResult, SearchResult } from '@/types/loinc';
 
 // Prefix matching (`:*` per token) so a search for "egfr" matches packed tokens
@@ -10,20 +11,30 @@ function buildPrefixTsQuery(q: string): string | null {
   return tokens.map((t) => `${t.toLowerCase()}:*`).join(' & ');
 }
 
-export async function searchLoinc(q: string): Promise<SearchResult[]> {
+export async function searchLoinc(
+  q: string,
+  unit?: string | null
+): Promise<SearchResult[]> {
   const tsq = buildPrefixTsQuery(q);
   if (!tsq) return [];
+  const unitNorm = normalizeUnit(unit ?? null);
 
   const rows = await sql`
     WITH q AS (
-      SELECT to_tsquery('english', ${tsq}) AS tsq, ${q}::text AS raw
+      SELECT
+        to_tsquery('english', ${tsq}) AS tsq,
+        ${q}::text AS raw,
+        ${unitNorm}::text AS unit_norm
     )
     SELECT
       l.loinc_num,
       l.component,
       l.shortname,
       l.long_common_name,
+      l.related_names,
+      l.property,
       l.system,
+      l.scale_typ,
       l.example_units,
       l.ucum_units,
       l.status,
@@ -43,6 +54,17 @@ export async function searchLoinc(q: string): Promise<SearchResult[]> {
     FROM loinc l, q
     WHERE l.status IN ('ACTIVE', 'TRIAL')
       AND (l.search_vector @@ q.tsq OR l.search_text % q.raw)
+      AND (
+        q.unit_norm IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM unnest(string_to_array(
+            coalesce(l.ucum_units, '') || ';' || coalesce(l.example_units, ''),
+            ';'
+          )) AS u
+          WHERE loinc_normalize_unit(u) = q.unit_norm
+        )
+      )
     ORDER BY score DESC
     LIMIT 20
   `;

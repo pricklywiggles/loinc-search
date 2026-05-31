@@ -1,16 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { GET as searchGET } from './search/route';
+import { GET as searchGET, POST as searchPOST } from './search/route';
 import { GET as loincGET } from './loinc/route';
 
 const KNOWN_ACTIVE = '98979-8'; // eGFRcr CKD-EPI 2021
 const KNOWN_DEPRECATED = '1009-0'; // → 1007-4
 const UNKNOWN = '00000-0';
+const TOTAL_PSA = '2857-1';
 
 const CACHE_RE = /s-maxage=60/;
 
 function req(path: string): Request {
   return new Request(`http://test.local${path}`);
 }
+
+function postReq(body: unknown): Request {
+  return new Request('http://test.local/api/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+type SearchEnvelope = {
+  results: Array<{ loinc_num: string; status?: string }>;
+  unitFilterApplied?: boolean;
+};
 
 describe('GET /api/search', () => {
   it('rejects empty q with 400', async () => {
@@ -24,59 +38,149 @@ describe('GET /api/search', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns a non-empty ranked array with cache header for a text query', async () => {
+  it('returns a wrapped non-empty ranked array with cache header for a text query', async () => {
     const res = await searchGET(req('/api/search?q=blood+urea+nitrogen'));
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toMatch(CACHE_RE);
-    const body = (await res.json()) as Array<{ loinc_num: string; status: string }>;
-    expect(Array.isArray(body)).toBe(true);
-    expect(body.length).toBeGreaterThan(0);
-    for (const r of body) expect(['ACTIVE', 'TRIAL']).toContain(r.status);
+    const body = (await res.json()) as SearchEnvelope;
+    expect(Array.isArray(body.results)).toBe(true);
+    expect(body.results.length).toBeGreaterThan(0);
+    expect(body.unitFilterApplied).toBeUndefined();
+    for (const r of body.results) expect(['ACTIVE', 'TRIAL']).toContain(r.status);
   });
 
   it('auto-routes to lookup when q is a LOINC code', async () => {
     const res = await searchGET(req(`/api/search?q=${KNOWN_ACTIVE}`));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ loinc_num: string }>;
-    expect(body).toHaveLength(1);
-    expect(body[0].loinc_num).toBe(KNOWN_ACTIVE);
+    const body = (await res.json()) as SearchEnvelope;
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0].loinc_num).toBe(KNOWN_ACTIVE);
   });
 
-  it('returns one result group per q when multiple q params are passed, with cache header', async () => {
+  it('filters by unit hint and reports unitFilterApplied=true when results survive', async () => {
     const res = await searchGET(
-      req(`/api/search?q=${KNOWN_ACTIVE}&q=blood+urea+nitrogen`)
+      req(`/api/search?q=PSA&unit=${encodeURIComponent('ng/mL')}`)
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(CACHE_RE);
-    const body = (await res.json()) as Array<Array<{ loinc_num: string }>>;
-    expect(Array.isArray(body)).toBe(true);
-    expect(body).toHaveLength(2);
-    expect(body[0]).toHaveLength(1);
-    expect(body[0][0].loinc_num).toBe(KNOWN_ACTIVE);
-    expect(body[1].length).toBeGreaterThan(0);
+    const body = (await res.json()) as SearchEnvelope;
+    expect(body.unitFilterApplied).toBe(true);
+    expect(body.results.find((r) => r.loinc_num === TOTAL_PSA)).toBeDefined();
   });
 
-  it('accepts a batch of exactly 50 q params (cap boundary)', async () => {
-    const qs = Array.from({ length: 50 }, () => `q=${KNOWN_ACTIVE}`).join('&');
-    const res = await searchGET(req(`/api/search?${qs}`));
+  it('falls back to unfiltered results with unitFilterApplied=false when the hint excludes everything', async () => {
+    const res = await searchGET(
+      req(`/api/search?q=PSA&unit=${encodeURIComponent('parsec/mol')}`)
+    );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as unknown[];
-    expect(body).toHaveLength(50);
+    const body = (await res.json()) as SearchEnvelope;
+    expect(body.unitFilterApplied).toBe(false);
+    expect(body.results.length).toBeGreaterThan(0);
   });
 
-  it('rejects a batch exceeding the cap with 400', async () => {
-    const qs = Array.from({ length: 51 }, () => 'q=foo').join('&');
-    const res = await searchGET(req(`/api/search?${qs}`));
+  // If the query has no matches at all, the unit wasn't the cause of empty
+  // results — claiming a bypass would be misleading. Reports applied=true.
+  it('reports unitFilterApplied=true when both filtered and unfiltered queries are empty', async () => {
+    const res = await searchGET(
+      req(`/api/search?q=zzzzzqqqqzzzz&unit=${encodeURIComponent('ng/mL')}`)
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SearchEnvelope;
+    expect(body.results).toEqual([]);
+    expect(body.unitFilterApplied).toBe(true);
+  });
+
+  it('rejects an oversized unit param with 400', async () => {
+    const big = 'a'.repeat(51);
+    const res = await searchGET(req(`/api/search?q=PSA&unit=${big}`));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/search', () => {
+  it('rejects an empty body with 400', async () => {
+    const res = await searchPOST(postReq({}));
     expect(res.status).toBe(400);
   });
 
-  it('returns an empty group for invalid q entries in a multi-q batch (does not fail the batch)', async () => {
-    const res = await searchGET(req('/api/search?q=blood+urea+nitrogen&q='));
+  it('rejects a non-JSON body with 400', async () => {
+    const res = await searchPOST(
+      new Request('http://test.local/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: 'not-json',
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a batch exceeding the cap with 400', async () => {
+    const items = Array.from({ length: 51 }, () => ({ q: 'foo' }));
+    const res = await searchPOST(postReq({ items }));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns one wrapped response per item, in order', async () => {
+    const res = await searchPOST(
+      postReq({
+        items: [{ q: KNOWN_ACTIVE }, { q: 'blood urea nitrogen' }],
+      })
+    );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<Array<{ loinc_num: string }>>;
-    expect(body).toHaveLength(2);
-    expect(body[0].length).toBeGreaterThan(0);
-    expect(body[1]).toEqual([]);
+    const body = (await res.json()) as { items: SearchEnvelope[] };
+    expect(body.items).toHaveLength(2);
+    expect(body.items[0].results[0].loinc_num).toBe(KNOWN_ACTIVE);
+    expect(body.items[1].results.length).toBeGreaterThan(0);
+  });
+
+  it('threads per-item unit hints through to the filter', async () => {
+    const res = await searchPOST(
+      postReq({
+        items: [
+          { q: 'PSA', unit: 'ng/mL' },
+          { q: 'PSA' },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: SearchEnvelope[] };
+    expect(body.items[0].unitFilterApplied).toBe(true);
+    expect(
+      body.items[0].results.find((r) => r.loinc_num === TOTAL_PSA)
+    ).toBeDefined();
+    expect(body.items[1].unitFilterApplied).toBeUndefined();
+  });
+
+  it('accepts a batch of exactly 50 items (cap boundary)', async () => {
+    const items = Array.from({ length: 50 }, () => ({ q: KNOWN_ACTIVE }));
+    const res = await searchPOST(postReq({ items }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: SearchEnvelope[] };
+    expect(body.items).toHaveLength(50);
+  });
+
+  // Mirrors /api/loinc batch behavior: a single malformed item collapses to
+  // an empty result in its slot rather than failing the whole batch.
+  it('returns { results: [] } for per-item validation failures without failing the batch', async () => {
+    const longUnit = 'a'.repeat(51);
+    const res = await searchPOST(
+      postReq({
+        items: [
+          { q: 'blood urea nitrogen' },
+          { q: '' },                          // empty q
+          { q: 12345 },                       // wrong type
+          { q: 'PSA', unit: longUnit },       // unit too long
+          { q: KNOWN_ACTIVE },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: SearchEnvelope[] };
+    expect(body.items).toHaveLength(5);
+    expect(body.items[0].results.length).toBeGreaterThan(0);
+    expect(body.items[1].results).toEqual([]);
+    expect(body.items[2].results).toEqual([]);
+    expect(body.items[3].results).toEqual([]);
+    expect(body.items[4].results[0].loinc_num).toBe(KNOWN_ACTIVE);
   });
 });
 

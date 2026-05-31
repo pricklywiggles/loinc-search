@@ -132,7 +132,7 @@ loinc-search/
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── search/route.ts      GET /api/search?q=… (single or batch, zod-validated)
+│   │   │   ├── search/route.ts      GET /api/search?q=… (single, optional &unit=) + POST /api/search (batch)
 │   │   │   └── loinc/route.ts       GET /api/loinc?code=… (single or batch, zod-validated)
 │   │   ├── layout.tsx
 │   │   └── page.tsx                 Single-input search UI
@@ -165,43 +165,72 @@ For lookup (paste a code), `lookupLoinc(code)` resolves one hop through `map_to`
 
 ## API
 
-Two read-only endpoints. Both accept a **single input** or a **batch** of inputs; the single-input response shape and status codes are unchanged from earlier versions of this app.
+Two read-only resources: `/api/search` (free-text + optional unit filter) and `/api/loinc` (exact-code lookup). Each exposes a **single-input** form and a **batch** form. The batch surfaces differ: `/api/search` uses `POST` with a JSON body, `/api/loinc` uses repeated/comma-separated `code` params on `GET`.
 
-Per-item validation failures behave differently between the two modes: single-input is strict (invalid input → `400`), batch is lenient (invalid item → `null`/`[]` in that slot, rest of the batch still resolves). Structural failures — missing param entirely, or batch over the cap — always return `400`. Cap is **50 items per request** on both endpoints.
+Per-item validation failures behave differently between the two modes: single-input is strict (invalid input → `400`), batch is lenient (invalid item → `null`/`[]`/`{ results: [] }` in that slot, rest of the batch still resolves). Structural failures — missing param entirely, malformed JSON, or batch over the cap — always return `400`. Cap is **50 items per request** on both endpoints.
 
-Both endpoints set `Cache-Control: public, s-maxage=60, stale-while-revalidate=300`.
+`GET` responses include `Cache-Control: public, s-maxage=60, stale-while-revalidate=300`. `POST /api/search` is uncached (only `GET` is cacheable in this framework, and a batch wouldn't benefit anyway).
 
-### `GET /api/search?q=…`
+### `GET /api/search?q=…&unit=…`
 
-Free-text search ranked over `component`, `shortname`, `long_common_name`, `related_names`, with a synonym signal from `consumer_names` (see [Ranking model](#ranking-model)). When `q` matches `^\d{1,7}-\d$` the server transparently routes to lookup so paste-a-code returns the full record. Each `q` is zod-validated as 1–200 chars after trim.
+Free-text search ranked over `component`, `shortname`, `long_common_name`, `related_names`, with a synonym signal from `consumer_names` (see [Ranking model](#ranking-model)). When `q` matches `^\d{1,7}-\d$` the server transparently routes to lookup so paste-a-code returns the full record. `q` is zod-validated as 1–200 chars after trim; `unit`, if present, is 1–50 chars after trim.
 
-**Single-input**
+The response is always wrapped: `{ results, unitFilterApplied? }`. `unitFilterApplied` is **omitted** when no `unit` was sent or when `q` was a code (codes don't use the hint); `true` when the filter ran and kept rows, or when both the filtered and unfiltered queries returned nothing (the unit wasn't the cause of emptiness); `false` only when the filter emptied the candidate set *and* the unfiltered fallback found rows.
 
 ```
 GET /api/search?q=blood+urea+nitrogen
-→ 200  SearchResult[]                          # up to 20, ranked desc by score
+→ 200  { results: SearchResult[] }                      # up to 20, ranked desc by score
 
-GET /api/search?q=98979-8                      # auto-routed to lookup
-→ 200  [LookupResult]                          # 0- or 1-element array
+GET /api/search?q=98979-8                                # auto-routed to lookup
+→ 200  { results: [LookupResult] }                       # 0- or 1-element array
 
-GET /api/search                                # missing
-GET /api/search?q=                             # empty after trim
-GET /api/search?q=<201 chars>                  # too long
+GET /api/search?q=PSA&unit=ng%2FmL                       # unit hint applied
+→ 200  { results: SearchResult[], unitFilterApplied: true }
+
+GET /api/search?q=PSA&unit=parsec%2Fmol                  # hint excludes everything
+→ 200  { results: SearchResult[], unitFilterApplied: false }   # fell back to unfiltered
+
+GET /api/search                                          # missing q
+GET /api/search?q=                                       # empty after trim
+GET /api/search?q=<201 chars>                            # too long
 → 400  { error: "Invalid query" }
+
+GET /api/search?q=PSA&unit=<51 chars>                    # unit too long
+→ 400  { error: "Invalid unit" }
 ```
 
-**Batch** — repeat the `q` param. Commas inside a `q` are kept literal because text searches legitimately contain them (`"blood, urea, nitrogen"`).
+The unit hint matches against both `ucum_units` and `example_units`. `ucum_units` (from LOINC's `EXAMPLE_UCUM_UNITS`) is canonically `;`-delimited when it carries multiple values, so the `;`-split is reliable there. `example_units` is freer-form; the filter `;`-splits it on the same convention as a best effort, but a row that happens to pack multiple values with a different separator would be missed. Both sides are normalized before comparison: lowercased, Greek mu (`μ`, `µ`) → `u`, `mcg` → `ug`. So `ng/mL`, `NG/ML`, `mcg/L`, `μg/L`, and `µg/L` all match the strings LOINC publishes — but `ug/L` and `ng/mL` are **not** treated as equivalent (same dimension, different orders of magnitude); the hint is literal modulo aliasing, not unit-algebra.
+
+### `POST /api/search`
+
+> **Breaking change.** Replaces the previous repeated-`q` GET batch form. `GET /api/search` no longer reads more than one `q` — extra values are ignored.
+
+Batch search. Request body is JSON: `{ items: [{ q, unit? }, ...] }` (1–50 items). Per-item processing is independent and runs with a bounded fan-out (8 concurrent DB calls). Results are returned in input order. Validation is **per-item lenient** to match `/api/loinc` batch behavior: a malformed item (missing/oversized `q`, oversized `unit`, wrong types) collapses to `{ results: [] }` in its slot rather than failing the whole batch.
 
 ```
-GET /api/search?q=blood+urea&q=98979-8
-→ 200  (SearchResult[] | LookupResult[])[]     # one group per q, in input order
+POST /api/search
+Content-Type: application/json
 
-GET /api/search?q=foo&q=                       # second q invalid
-→ 200  [[...results], []]                      # invalid slot becomes []
+{ "items": [
+    { "q": "PSA", "unit": "ng/mL" },
+    { "q": "cortisol" },
+    { "q": "2857-1" }
+]}
 
-GET /api/search?q=<51 q's>
-→ 400  { error: "Too many queries (max 50)" }
+→ 200  { items: [
+    { results: SearchResult[], unitFilterApplied: true },
+    { results: SearchResult[] },
+    { results: [LookupResult] }
+]}
 ```
+
+```
+POST /api/search   (malformed JSON body)              → 400 { error: "Invalid JSON body" }
+POST /api/search   (missing items, empty items, > 50 items, items not an array of objects)
+                                                      → 400 { error: "Invalid body (...)" }
+```
+
+Per-item failures — either a validation rejection on the item or a DB error during its query — collapse to `{ results: [] }` for that slot. Runtime failures are logged server-side; validation rejections are silent. The rest of the batch still resolves. A batch where **every** item rejects at runtime returns `500` (almost always an outage; surfacing it loudly so callers can't mistake it for "no results").
 
 ### `GET /api/loinc?code=…`
 
@@ -251,7 +280,10 @@ interface SearchResult {
   component: string;
   shortname: string | null;
   long_common_name: string | null;
+  related_names: string | null;
+  property: string;
   system: string;
+  scale_typ: string;
   example_units: string | null;
   ucum_units: string | null;
   status: LoincStatus;
@@ -308,8 +340,9 @@ The canonical definitions live in [`src/types/loinc.ts`](src/types/loinc.ts).
 
 Two suites, both run against the Neon dev branch via `pnpm test`:
 
-- **`src/lib/search.test.ts`** — `searchLoinc` and `lookupLoinc` against real data: `egfr` ranks kidney CKD-EPI 2021 codes above oncology EGFR mutations; `DEPRECATED`/`DISCOURAGED` rows are excluded from search; `TRIAL` rows score half; deprecated codes redirect to their target with `deprecated_alias.source_code` populated; unknown codes return `null`.
-- **`src/app/api/routes.test.ts`** — API route handlers called directly with `Request` objects: single-input validation (400 on missing/invalid/too-long input), 404 on unknown codes, 200 with proper response shape and `Cache-Control` headers, search auto-routes to lookup when `q` matches the LOINC code pattern, batch endpoints (repeated params, comma-separated codes, per-item `null`/`[]` for invalid entries, 400 when over the 50-item cap).
+- **`src/lib/normalize-unit.test.ts`** — pure unit-string normalizer: case folding, Greek mu / micro sign → `u`, `mcg` → `ug`, internal whitespace preserved, null/empty inputs.
+- **`src/lib/search.test.ts`** — `searchLoinc` and `lookupLoinc` against real data: `egfr` ranks kidney CKD-EPI 2021 codes above oncology EGFR mutations; `DEPRECATED`/`DISCOURAGED` rows are excluded from search; `TRIAL` rows score half; deprecated codes redirect to their target with `deprecated_alias.source_code` populated; unknown codes return `null`; a `ng/mL` unit hint surfaces total-PSA (`2857-1`) which is otherwise buried past `LIMIT 20`.
+- **`src/app/api/routes.test.ts`** — API route handlers called directly with `Request` objects: single-input validation (400 on missing/invalid/too-long input), 404 on unknown codes, 200 with proper response shape and `Cache-Control` headers, search auto-routes to lookup when `q` matches the LOINC code pattern, GET unit hint filter + fallback semantics, POST batch shape and per-item unit threading, `/api/loinc` batch (repeated params, comma-separated codes, per-item `null` for invalid entries, 400 when over the 50-item cap).
 
 ---
 
