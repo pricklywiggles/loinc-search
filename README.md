@@ -20,7 +20,7 @@ pnpm import-loinc --env dev docs                    # load CSVs (non-interactive
 pnpm dev                                            # http://localhost:3000
 ```
 
-Requirements: pnpm 10+, Node 20+, `psql`, [`gum`](https://github.com/charmbracelet/gum) (only for interactive `pnpm import-loinc` runs — `brew install gum`), and a Neon Postgres branch with `pg_trgm` available (free tier works).
+Requirements: pnpm 10+, Node 20+, `psql`, [`gum`](https://github.com/charmbracelet/gum) (only for interactive `pnpm import-loinc` runs — `brew install gum`), and a Neon Postgres project with `pg_trgm` available (free tier works).
 
 ### Environment
 
@@ -52,12 +52,12 @@ docs/
 
 ## Refreshing the database with a new LOINC release
 
-`pnpm import-loinc` wraps the importer in an interactive [gum](https://github.com/charmbracelet/gum) CLI. Two env files drive it:
+`pnpm import-loinc` wraps the importer in an interactive [gum](https://github.com/charmbracelet/gum) CLI. Dev and prod live in **separate Neon projects** so their storage is independent; two env files select between them:
 
 | File | Loaded when you pick / pass | What it should contain |
 | --- | --- | --- |
-| `.env.local`            | `--env dev`  | Dev Neon branch credentials. |
-| `.env.production.local` | `--env prod` | Production Neon branch credentials (gitignored, only present on the operator's machine). On Vercel: `pnpm dlx vercel env pull .env.production.local`. |
+| `.env.local`            | `--env dev`  | Dev Neon **project** credentials. |
+| `.env.production.local` | `--env prod` | Production Neon **project** credentials (gitignored, only present on the operator's machine). On Vercel: `pnpm dlx vercel env pull .env.production.local`. |
 
 ### Usage
 
@@ -99,7 +99,7 @@ Target:               neondb_owner@ep-mossy-…neon.tech/neondb
 
 ### Production refresh — in-place atomic refresh
 
-The recommended workflow for this project is an **in-place atomic refresh** against `main`:
+The recommended workflow for this project is an **in-place atomic refresh** against the production branch:
 
 1. **Capture prod credentials** into `.env.production.local` once. On Vercel: `pnpm dlx vercel env pull .env.production.local`.
 2. **Run the import non-interactively** against prod:
@@ -111,7 +111,7 @@ The recommended workflow for this project is an **in-place atomic refresh** agai
 
 The `TRUNCATE`+`COPY`+`COMMIT` runs inside a single transaction: until `COMMIT` the old rows remain visible to readers, and any failure mid-import rolls back automatically. So in-place is safe even though it skips a verification window.
 
-**Why not a branch-and-promote workflow?** A fully-loaded LOINC dataset is ~242 MB per branch (218 MB `loinc` heap + indexes, 15 MB `consumer_names`, etc.). Neon's Free plan caps storage at **500 MB *per project*** (across all branches combined — copy-on-write means a fresh branch starts at ~0, but a `TRUNCATE`+`COPY` fully diverges it). With dev + prod both fully populated you're already at ~484 MB, so spinning up a refresh branch tips the project over the cap. If you upgrade to Launch or trim the dev dataset, you can revisit the branch-and-promote pattern (create branch from `main` → import → verify → rename branch to `main`).
+**Why not a branch-and-promote workflow?** A fully-loaded LOINC dataset is ~242 MB (218 MB `loinc` heap + indexes, 15 MB `consumer_names`, etc.), and Neon's Free plan caps storage at **500 MB per project**. Dev and prod live in **separate projects**, each holding a single fully-loaded copy (~242 MB) — comfortably under the cap, but with no room to keep a second diverged copy alongside it (a copy-on-write branch starts at ~0, but a `TRUNCATE`+`COPY` fully diverges it to ~242 MB, pushing that project toward ~484 MB). The in-place refresh above avoids the second copy entirely. If you upgrade to Launch, you can revisit branch-and-promote (create branch → import → verify → promote). Because dev is its own project — not a copy-on-write child of prod — refreshing dev just means re-running `pnpm import-loinc --env dev` against the LOINC CSVs.
 
 **Don't keep prod creds on a laptop long-term.** The portable upgrade is a manually-triggered GitHub Action that runs `pnpm import-loinc --env prod <folder>` with `DATABASE_URL_UNPOOLED` from repo secrets. Not included in this repo yet.
 
@@ -329,7 +329,7 @@ The canonical definitions live in [`src/types/loinc.ts`](src/types/loinc.ts).
 | `pnpm dev` | Run the Next.js dev server at <http://localhost:3000>. |
 | `pnpm build` | Production build. |
 | `pnpm start` | Serve the production build. |
-| `pnpm test` | Run the vitest suite against the Neon dev branch (reads `.env.local`). |
+| `pnpm test` | Run the vitest suite against the Neon dev project (reads `.env.local`). |
 | `pnpm lint` | ESLint. |
 | `pnpm typecheck` | `tsc --noEmit`. |
 | `pnpm import-loinc [--env dev\|prod] [folder]` | Refresh the database from a LOINC distribution folder. Interactive when args are missing; non-interactive when both `--env` and folder are supplied. |
@@ -338,7 +338,7 @@ The canonical definitions live in [`src/types/loinc.ts`](src/types/loinc.ts).
 
 ## Tests
 
-Two suites, both run against the Neon dev branch via `pnpm test`:
+Two suites, both run against the Neon dev project via `pnpm test`:
 
 - **`src/lib/normalize-unit.test.ts`** — unit-string normalizer: case folding, Greek mu / micro sign → `u`, `mcg` → `ug`, caret powers (`10^6` → `10*6`), `mEq/L` → `mmol/L` (valence-blind by design), internal whitespace preserved, null/empty inputs; plus a TS↔SQL parity check binding `normalizeUnit` to the Postgres `loinc_normalize_unit()` so the two can't drift.
 - **`src/lib/search.test.ts`** — `searchLoinc` and `lookupLoinc` against real data: `egfr` ranks kidney CKD-EPI 2021 codes above oncology EGFR mutations; `DEPRECATED`/`DISCOURAGED` rows are excluded from search; `TRIAL` rows score half; deprecated codes redirect to their target with `deprecated_alias.source_code` populated; unknown codes return `null`; a `ng/mL` unit hint surfaces total-PSA (`2857-1`) which is otherwise buried past `LIMIT 20`; `common_test_rank` lifts the common WBC count (`6690-2`) over rarer variants, with `loinc_common_test_boost()` bounds-checked directly (unranked → `1.0`, clamped, monotonic); the dimension gate keeps the general nucleated-RBC ratio (`58413-6`) above the fetal variant for a `/100 WBC` hint, and `loinc_unit_class()` / `loinc_property_class()` are checked to agree on dimension class.
