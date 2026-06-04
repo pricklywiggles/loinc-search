@@ -135,9 +135,8 @@ describe('searchLoinc', () => {
     expect(general).toBeLessThan(fetal);
   });
 
-  // Consumer-in-recall: the lay name "mean cell hemoglobin" lives only in the
-  // consumer name ("Mean Corpuscular Hemoglobin (MCH)…"), which now feeds
-  // search_vector. Without the fold, 785-6 is absent from the window entirely.
+  // "mean cell hemoglobin" lives only in 785-6's consumer name; without folding
+  // that into search_vector the code is absent from the result window entirely.
   it('recalls MCH (785-6) for its lay name via the consumer-name fold', async () => {
     const results = await searchLoinc('MEAN CELL HEMOGLOBIN', 'pg');
     expect(results.some((r) => r.loinc_num === '785-6')).toBe(true);

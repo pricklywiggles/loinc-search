@@ -120,10 +120,8 @@ CREATE TABLE loinc (
   common_test_rank       INTEGER,
   common_order_rank      INTEGER,
   classtype              INTEGER,
-  -- Patient-facing consumer names, denormalized from consumer_names so the lay
-  -- vocabulary ("Mean Corpuscular Hemoglobin", "Cobalamin (Vitamin B12)") counts
-  -- toward search RECALL, not just ranking. The importer populates this after
-  -- consumer_names loads; the generated columns below then pick it up.
+  -- Consumer names denormalized so the lay vocabulary counts toward search recall,
+  -- not just ranking; the importer populates it after consumer_names loads.
   consumer_names_text    TEXT,
   search_text            TEXT GENERATED ALWAYS AS (
     COALESCE(component, '') || ' ' ||

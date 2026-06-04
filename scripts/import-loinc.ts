@@ -163,9 +163,8 @@ async function main() {
     `);
     await client.query('DROP TABLE consumer_names_raw');
 
-    // Denormalize consumer names onto loinc so they feed search_text /
-    // search_vector (recall), not just the ranking subquery. Must run after
-    // consumer_names is loaded; the generated columns recompute on this UPDATE.
+    // Denormalize consumer names into loinc so they feed search recall, not just
+    // the ranking subquery; must run after consumer_names is loaded.
     console.log('Folding consumer names into search text…');
     await client.query(`
       UPDATE loinc l SET consumer_names_text = sub.names
