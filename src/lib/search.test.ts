@@ -134,6 +134,13 @@ describe('searchLoinc', () => {
     expect(fetal).toBeGreaterThanOrEqual(0);
     expect(general).toBeLessThan(fetal);
   });
+
+  // "mean cell hemoglobin" lives only in 785-6's consumer name; without folding
+  // that into search_vector the code is absent from the result window entirely.
+  it('recalls MCH (785-6) for its lay name via the consumer-name fold', async () => {
+    const results = await searchLoinc('MEAN CELL HEMOGLOBIN', 'pg');
+    expect(results.some((r) => r.loinc_num === '785-6')).toBe(true);
+  });
 });
 
 // Binds the boost expression used by searchLoinc's ORDER BY to its real source

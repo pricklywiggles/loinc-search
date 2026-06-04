@@ -163,6 +163,18 @@ async function main() {
     `);
     await client.query('DROP TABLE consumer_names_raw');
 
+    // Denormalize consumer names into loinc so they feed search recall, not just
+    // the ranking subquery; must run after consumer_names is loaded.
+    console.log('Folding consumer names into search text…');
+    await client.query(`
+      UPDATE loinc l SET consumer_names_text = sub.names
+      FROM (
+        SELECT loinc_num, string_agg(consumer_name, ' ') AS names
+        FROM consumer_names GROUP BY loinc_num
+      ) sub
+      WHERE sub.loinc_num = l.loinc_num
+    `);
+
     await client.query('COMMIT');
 
     // ANALYZE outside the transaction so the planner picks up new stats immediately

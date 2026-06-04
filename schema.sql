@@ -120,18 +120,23 @@ CREATE TABLE loinc (
   common_test_rank       INTEGER,
   common_order_rank      INTEGER,
   classtype              INTEGER,
+  -- Consumer names denormalized so the lay vocabulary counts toward search recall,
+  -- not just ranking; the importer populates it after consumer_names loads.
+  consumer_names_text    TEXT,
   search_text            TEXT GENERATED ALWAYS AS (
     COALESCE(component, '') || ' ' ||
     COALESCE(shortname, '') || ' ' ||
     COALESCE(long_common_name, '') || ' ' ||
-    COALESCE(related_names, '')
+    COALESCE(related_names, '') || ' ' ||
+    COALESCE(consumer_names_text, '')
   ) STORED,
   search_vector          tsvector GENERATED ALWAYS AS (
     to_tsvector('english',
       COALESCE(component, '') || ' ' ||
       COALESCE(shortname, '') || ' ' ||
       COALESCE(long_common_name, '') || ' ' ||
-      COALESCE(related_names, ''))
+      COALESCE(related_names, '') || ' ' ||
+      COALESCE(consumer_names_text, ''))
   ) STORED
 );
 
